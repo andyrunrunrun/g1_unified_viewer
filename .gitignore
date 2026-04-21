@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+exports/
+examples/output/*
+!examples/output/.gitkeep
+.venv/
+.superpowers/
+.worktrees/
+worktrees/
+MUJOCO_LOG.TXT

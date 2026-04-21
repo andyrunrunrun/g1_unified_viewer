@@ -1,0 +1,19 @@
+[project]
+name = "g1-unified-viewer"
+version = "0.1.0"
+description = "MuJoCo-first local web viewer for G1 motion datasets and policy runners."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115.0",
+  "httpx>=0.27.0",
+  "mujoco>=3.2.0",
+  "msgpack>=1.0.8",
+  "numpy>=1.26.0",
+  "pillow>=10.4.0",
+  "pydantic>=2.8.0",
+  "uvicorn>=0.30.0",
+]
+
+[tool.uv]
+package = false

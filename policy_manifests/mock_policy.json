@@ -1,0 +1,14 @@
+{
+  "policy_id": "mock_g1_policy",
+  "display_name": "Mock G1 Policy",
+  "robot_type": "g1",
+  "env_python": "__CURRENT_PYTHON__",
+  "entrypoint": "g1_viewer/mock_policy_runner.py",
+  "weights_path": null,
+  "control_mode": "joint_position_target",
+  "tags": [
+    "mock",
+    "demo"
+  ],
+  "description": "Reference subprocess runner used to validate the policy interface."
+}

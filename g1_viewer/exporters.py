@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import csv
+import json
+import pickle
+import re
+from pathlib import Path
+
+import numpy as np
+
+from .config import EXPORT_ROOT
+from .models import StateSequence
+
+
+def _sanitize_name(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9._-]+", "_", name).strip("_") or "clip"
+
+
+def _wxyz_to_xyzw(quaternions: np.ndarray) -> np.ndarray:
+    quaternions = np.asarray(quaternions, dtype=np.float32)
+    if quaternions.ndim == 1:
+        return quaternions[[1, 2, 3, 0]]
+    return quaternions[:, [1, 2, 3, 0]]
+
+
+def trim_sequence(sequence: StateSequence, start_frame: int, end_frame: int) -> StateSequence:
+    if start_frame < 0 or end_frame < 0:
+        raise ValueError("Trim frames must be non-negative")
+    if end_frame < start_frame:
+        raise ValueError("end_frame must be greater than or equal to start_frame")
+    if end_frame >= sequence.frame_count:
+        raise ValueError("end_frame exceeds clip length")
+
+    trimmed_frames = sequence.frames[start_frame : end_frame + 1]
+    trimmed = StateSequence(
+        sequence_id=f"{sequence.sequence_id}_trim_{start_frame}_{end_frame}",
+        name=f"{sequence.name}_trim_{start_frame}_{end_frame}",
+        source_type=sequence.source_type,
+        source_format=sequence.source_format,
+        fps=sequence.fps,
+        frame_count=len(trimmed_frames),
+        joint_names=sequence.joint_names,
+        body_names=sequence.body_names,
+        source_path=sequence.source_path,
+        frames=trimmed_frames,
+        metadata={
+            **sequence.metadata,
+            "trim_start_frame": start_frame,
+            "trim_end_frame": end_frame,
+        },
+    )
+    return trimmed
+
+
+def export_trimmed_sequence(
+    sequence: StateSequence,
+    start_frame: int,
+    end_frame: int,
+    export_root: Path | None = None,
+) -> Path:
+    trimmed = trim_sequence(sequence, start_frame, end_frame)
+    export_root = export_root or EXPORT_ROOT
+    export_root.mkdir(parents=True, exist_ok=True)
+
+    if trimmed.source_format == "sonic":
+        return _export_sonic(trimmed, export_root)
+    if trimmed.source_format == "twist2":
+        return _export_twist2(trimmed, export_root)
+    raise ValueError(f"Unsupported export format: {trimmed.source_format}")
+
+
+def _export_sonic(sequence: StateSequence, export_root: Path) -> Path:
+    target_dir = export_root / "sonic" / _sanitize_name(sequence.name)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    joint_pos = np.asarray([frame.joint_positions for frame in sequence.frames], dtype=float)
+    joint_vel = np.asarray([frame.joint_velocities for frame in sequence.frames], dtype=float)
+    body_pos = np.asarray([frame.body_positions for frame in sequence.frames], dtype=float)
+    body_rot = np.asarray([frame.body_rotations_wxyz for frame in sequence.frames], dtype=float)
+
+    _write_csv(
+        target_dir / "joint_pos.csv",
+        sequence.joint_names,
+        joint_pos,
+    )
+    _write_csv(
+        target_dir / "joint_vel.csv",
+        sequence.joint_names,
+        joint_vel,
+    )
+
+    if body_pos.size:
+        body_pos_headers = []
+        for body_name in sequence.body_names:
+            body_pos_headers.extend([f"{body_name}_x", f"{body_name}_y", f"{body_name}_z"])
+        _write_csv(target_dir / "body_pos.csv", body_pos_headers, body_pos.reshape(body_pos.shape[0], -1))
+
+    if body_rot.size:
+        body_rot_headers = []
+        for body_name in sequence.body_names:
+            body_rot_headers.extend([f"{body_name}_w", f"{body_name}_x", f"{body_name}_y", f"{body_name}_z"])
+        _write_csv(target_dir / "body_quat.csv", body_rot_headers, body_rot.reshape(body_rot.shape[0], -1))
+
+    metadata = {
+        "name": sequence.name,
+        "fps": sequence.fps,
+        "frame_count": sequence.frame_count,
+        **sequence.metadata,
+    }
+    (target_dir / "fps.txt").write_text(f"{sequence.fps}\n")
+    (target_dir / "metadata.txt").write_text(
+        "\n".join(f"{key}: {value}" for key, value in metadata.items()) + "\n"
+    )
+    (target_dir / "info.txt").write_text(
+        json.dumps(
+            {
+                "joint_names": sequence.joint_names,
+                "body_names": sequence.body_names,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return target_dir
+
+
+def _export_twist2(sequence: StateSequence, export_root: Path) -> Path:
+    source_path = Path(sequence.source_path)
+    suffix = source_path.suffix.lower() if source_path.suffix else ".pkl"
+    target_dir = export_root / "twist2"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{_sanitize_name(sequence.name)}{suffix if suffix in {'.pkl', '.npz', '.json'} else '.pkl'}"
+
+    payload = {
+        "fps": float(sequence.fps),
+        "root_pos": np.asarray([frame.root_translation for frame in sequence.frames], dtype=np.float32),
+        "root_rot": _wxyz_to_xyzw(
+            np.asarray([frame.root_rotation_wxyz for frame in sequence.frames], dtype=np.float32)
+        ),
+        "dof_pos": np.asarray([frame.joint_positions for frame in sequence.frames], dtype=np.float32),
+        "local_body_pos": np.asarray([frame.body_positions for frame in sequence.frames], dtype=np.float32),
+        "link_body_list": sequence.body_names,
+    }
+
+    if target_path.suffix == ".npz":
+        np.savez(target_path, **payload)
+    elif target_path.suffix == ".json":
+        serializable = {
+            key: value.tolist() if hasattr(value, "tolist") else value
+            for key, value in payload.items()
+        }
+        target_path.write_text(json.dumps(serializable, indent=2) + "\n")
+    else:
+        with target_path.open("wb") as handle:
+            pickle.dump(payload, handle)
+    return target_path
+
+
+def _write_csv(path: Path, headers: list[str], array: np.ndarray) -> None:
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(headers)
+        writer.writerows(array.tolist())

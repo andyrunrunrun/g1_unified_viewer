@@ -1,0 +1,4 @@
+{
+  "note": "Tiny bundled sonic-style sample for local testing."
+}
+

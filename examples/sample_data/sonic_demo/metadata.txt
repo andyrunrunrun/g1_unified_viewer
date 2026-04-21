@@ -1,0 +1,5 @@
+name: sonic_demo
+source_fps: 50
+output_fps: 50
+frame_count: 4
+
