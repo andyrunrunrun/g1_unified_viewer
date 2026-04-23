@@ -87,13 +87,17 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertTrue(summary.physics_enabled)
         self.assertEqual(summary.active_policy_id, "mock_g1_policy")
         self.assertEqual(summary.view_mode, "policy")
-        self.assertIn("physics enabled", " ".join(summary.last_log_messages).lower())
+        enabled_logs = " ".join(summary.last_log_messages).lower()
+        self.assertIn("physics enabled", enabled_logs)
+        self.assertNotIn("policy started", enabled_logs)
 
         summary = self.controller.toggle_physics(False)
         self.assertFalse(summary.physics_enabled)
         self.assertIsNone(summary.active_policy_id)
         self.assertEqual(summary.view_mode, "dataset")
-        self.assertIn("physics disabled", " ".join(summary.last_log_messages).lower())
+        disabled_logs = " ".join(summary.last_log_messages).lower()
+        self.assertIn("physics disabled", disabled_logs)
+        self.assertNotIn("policy stopped", disabled_logs)
 
     def test_seek_while_physics_on_keeps_session_state_consistent(self) -> None:
         self.controller.toggle_physics(True)
@@ -120,6 +124,15 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(summary.active_policy_id, "mock_g1_policy")
         self.assertEqual(summary.view_mode, "policy")
 
+    def test_start_policy_marks_reset_and_logs_lifecycle(self) -> None:
+        self.controller.start_policy("mock_g1_policy")
+        summary = self.controller.get_session_summary()
+
+        self.assertTrue(summary.physics_enabled)
+        self.assertTrue(self.controller.consume_physics_reset_flag())
+        self.assertFalse(self.controller.consume_physics_reset_flag())
+        self.assertIn("policy started", " ".join(summary.last_log_messages).lower())
+
     def test_stop_policy_after_physics_enable_keeps_summary_coherent(self) -> None:
         self.controller.toggle_physics(True)
         summary = self.controller.stop_policy()
@@ -129,6 +142,18 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(summary.view_mode, "dataset")
         self.assertEqual(summary.last_observation_summary, {})
         self.assertEqual(summary.last_action_summary, {})
+
+    def test_stop_policy_marks_reset_and_logs_lifecycle(self) -> None:
+        self.controller.start_policy("mock_g1_policy")
+        self.assertTrue(self.controller.consume_physics_reset_flag())
+        summary = self.controller.stop_policy()
+
+        self.assertFalse(summary.physics_enabled)
+        self.assertIsNone(summary.active_policy_id)
+        self.assertEqual(summary.view_mode, "dataset")
+        self.assertTrue(self.controller.consume_physics_reset_flag())
+        self.assertFalse(self.controller.consume_physics_reset_flag())
+        self.assertIn("policy stopped", " ".join(summary.last_log_messages).lower())
 
     def test_load_clip_resets_physics_related_session_state(self) -> None:
         self.controller.toggle_physics(True)

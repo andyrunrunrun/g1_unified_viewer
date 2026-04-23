@@ -150,7 +150,7 @@ class SessionController:
             self._physics_enabled = bool(enabled)
             self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
             if self._physics_enabled and self._active_policy_id is None:
-                self.start_policy("mock_g1_policy")
+                self.start_policy("mock_g1_policy", _emit_lifecycle_log=False)
             elif not self._physics_enabled and self._active_policy_id is not None:
                 self._stop_policy_locked()
             self._push_log_locked("physics enabled" if self._physics_enabled else "physics disabled")
@@ -196,9 +196,12 @@ class SessionController:
         sequence = self.get_sequence(sequence_id)
         return export_trimmed_sequence(sequence, start_frame, end_frame)
 
-    def start_policy(self, policy_id: str) -> dict[str, Any]:
+    def start_policy(self, policy_id: str, *, _emit_lifecycle_log: bool = True) -> dict[str, Any]:
+        with self._lock:
+            self._require_active_sequence_locked()
         result = self._policy_manager.start(policy_id)
         with self._lock:
+            self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
             self._physics_enabled = True
             self._active_policy_id = policy_id
             self._policy_state = None
@@ -209,12 +212,21 @@ class SessionController:
             self._last_playback_time = None
             self._frame_accumulator = 0.0
             self._last_error = None
+            if _emit_lifecycle_log:
+                self._push_log_locked(f"policy started: {policy_id}")
             return result
 
     def stop_policy(self) -> SessionSummary:
         with self._lock:
+            had_active_policy = self._active_policy_id is not None
+            was_physics_enabled = self._physics_enabled
             self._stop_policy_locked()
-            self._clear_physics_state_locked(disable_physics=True, needs_reset=False)
+            self._clear_physics_state_locked(
+                disable_physics=True,
+                needs_reset=had_active_policy or was_physics_enabled,
+            )
+            if had_active_policy:
+                self._push_log_locked("policy stopped")
             return self._build_summary_locked()
 
     def step_policy(
@@ -228,7 +240,9 @@ class SessionController:
         with self._lock:
             if self._active_policy_id != policy_id:
                 self.start_policy(policy_id)
-            self._physics_enabled = True
+            elif not self._physics_enabled:
+                self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
+                self._physics_enabled = True
             base_state = snapshot.state if snapshot is not None else self._dataset_state_locked(tick_now)
             policy_snapshot = snapshot or self._build_snapshot_locked(base_state, tick_now)
             result = self._policy_manager.step(policy_id, policy_snapshot)
