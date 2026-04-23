@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 import unittest
 from pathlib import Path
@@ -121,22 +120,63 @@ class SessionStateSourceTest(unittest.TestCase):
         refreshed_state = self.controller.tick(now=10.001)
         sequence_id = self.controller.get_session_summary().active_sequence.sequence_id
         frame = self.controller.get_sequence(sequence_id).frames[2]
-        expected = [
-            float(position) + 0.05 * math.sin(10.001 * 2.0 + index * 0.3)
-            for index, position in enumerate(frame.joint_positions)
-        ]
 
         self.assertNotEqual(initial_state.joint_positions, refreshed_state.joint_positions)
         self.assertEqual(summary_after_seek.last_policy_result, {})
-        self.assertEqual(len(expected), len(refreshed_state.joint_positions))
-        for actual, target in zip(refreshed_state.joint_positions, expected):
-            self.assertAlmostEqual(actual, target, places=6)
+        self.assertEqual(refreshed_state.joint_positions, frame.joint_positions)
 
     def test_toggle_physics_reset_flag_is_consumed_once(self) -> None:
         self.controller.toggle_physics(True)
 
         self.assertTrue(self.controller.consume_physics_reset_flag())
         self.assertFalse(self.controller.consume_physics_reset_flag())
+
+    def test_prepare_physics_reset_resets_runner_and_returns_reference_state(self) -> None:
+        self.controller.toggle_physics(True)
+        self.controller.seek(2)
+
+        with patch.object(self.controller._policy_manager, "reset", wraps=self.controller._policy_manager.reset) as reset_mock:
+            reference = self.controller.prepare_physics_reset(now=12.0)
+
+        self.assertIsNotNone(reference)
+        self.assertEqual(reference.metadata["frame_index"], 2)
+        reset_mock.assert_called_once()
+        self.assertFalse(self.controller.consume_physics_reset_flag())
+
+    def test_stop_while_physics_enabled_requests_reset_and_clears_simulated_state(self) -> None:
+        self.controller.toggle_physics(True)
+        self.controller.update_simulated_state(
+            CanonicalRobotState(
+                timestamp=1.0,
+                root_translation=[0.0, 0.0, 0.78],
+                joint_positions=[0.2, -0.1, 0.3],
+                joint_velocities=[0.0, 0.0, 0.0],
+            )
+        )
+
+        summary = self.controller.stop()
+
+        self.assertTrue(summary.physics_enabled)
+        self.assertEqual(summary.current_frame, 0)
+        self.assertTrue(self.controller.consume_physics_reset_flag())
+        self.assertIsNone(self.controller.simulated_state())
+
+    def test_tick_returns_simulated_state_and_advances_playback_in_physics_mode(self) -> None:
+        self.controller.toggle_physics(True)
+        self.controller.play(now=10.0)
+        simulated_state = CanonicalRobotState(
+            timestamp=10.0,
+            root_translation=[0.0, 0.0, 0.78],
+            joint_positions=[0.4, -0.3, 0.2],
+            joint_velocities=[0.0, 0.0, 0.0],
+        )
+        self.controller.update_simulated_state(simulated_state)
+
+        state = self.controller.tick(now=10.04)
+        summary = self.controller.get_session_summary()
+
+        self.assertEqual(state.joint_positions, simulated_state.joint_positions)
+        self.assertGreater(summary.current_frame, 0)
 
     def test_start_policy_enters_coherent_policy_runtime_mode(self) -> None:
         self.controller.start_policy("mock_g1_policy")

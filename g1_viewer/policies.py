@@ -155,6 +155,11 @@ class PolicyRunnerManager:
             self.start(policy_id)
         return self._active[policy_id].step(snapshot)
 
+    def reset(self, policy_id: str, context: dict | None = None) -> dict:
+        if policy_id not in self._active:
+            self.start(policy_id)
+        return self._active[policy_id].reset(context)
+
     def mock_step(self, policy_id: str, snapshot: SimulationSnapshot) -> dict:
         return self.step(policy_id, snapshot)
 

@@ -146,6 +146,8 @@ class SessionController:
             self._current_frame = 0
             self._last_playback_time = None
             self._frame_accumulator = 0.0
+            if self._physics_enabled:
+                self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
             return self._build_summary_locked()
 
     def toggle_physics(self, enabled: bool) -> SessionSummary:
@@ -183,6 +185,43 @@ class SessionController:
             should_reset = self._physics_needs_reset
             self._physics_needs_reset = False
             return should_reset
+
+    def prepare_physics_reset(self, now: float | None = None) -> CanonicalRobotState | None:
+        tick_now = time.monotonic() if now is None else now
+        with self._lock:
+            if not self._physics_needs_reset:
+                return None
+            reference_state = self._dataset_state_locked(tick_now)
+            self._reference_state = _clone_state(reference_state)
+            self._physics_needs_reset = False
+            active_policy_id = self._active_policy_id
+            sequence = self._get_active_sequence_locked()
+            context = {
+                "current_frame": self._current_frame,
+                "trim_start": self._trim_start,
+                "trim_end": self._trim_end,
+                "timestamp": tick_now,
+            }
+            if sequence is not None:
+                context.update(
+                    {
+                        "sequence_id": sequence.sequence_id,
+                        "source_path": sequence.source_path,
+                        "source_format": sequence.source_format,
+                    }
+                )
+
+        if active_policy_id is not None:
+            try:
+                self._policy_manager.reset(active_policy_id, context)
+            except Exception as exc:
+                with self._lock:
+                    self._last_error = str(exc)
+                raise
+
+        with self._lock:
+            self._last_error = None
+        return reference_state
 
     def reference_state(self, now: float | None = None) -> CanonicalRobotState:
         tick_now = time.monotonic() if now is None else now
@@ -368,6 +407,17 @@ class SessionController:
         with self._lock:
             if self._playback_state == "playing":
                 self._advance_playback_locked(tick_now)
+
+            if self._physics_enabled:
+                if self._simulated_state is not None:
+                    state = _clone_state(self._simulated_state)
+                    state.timestamp = tick_now
+                    return state
+                if self._policy_state is not None and self._get_active_sequence_locked() is None:
+                    state = _clone_state(self._policy_state)
+                    state.timestamp = tick_now
+                    return state
+                return self._dataset_state_locked(tick_now)
 
             base_state = self._base_state_for_tick_locked(tick_now)
             if self._active_policy_id is None:

@@ -44,12 +44,13 @@ class NativeViewerRuntime:
             self._configure_camera(handle.cam)
             try:
                 while handle.is_running():
-                    summary = self.controller.get_session_summary()
                     tick_now = time.monotonic()
+                    self.controller.tick(now=tick_now)
+                    summary = self.controller.get_session_summary()
                     with handle.lock():
                         if summary.physics_enabled:
-                            if self.controller.consume_physics_reset_flag():
-                                reference_state = self.controller.reference_state(now=tick_now)
+                            reference_state = self.controller.prepare_physics_reset(now=tick_now)
+                            if reference_state is not None:
                                 reset_data_to_state(self.model, self.data, reference_state)
                                 mujoco.mj_forward(self.model, self.data)
 
