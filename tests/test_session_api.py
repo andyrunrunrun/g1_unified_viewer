@@ -364,6 +364,34 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["current_frame"], 2)
 
+    def test_grouped_policy_active_requires_explicit_policy_id_or_null(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(SONIC_SAMPLE), "format": "sonic"})
+        self.client.post("/api/policies/start", json={"policy_id": "mock_g1_policy"})
+
+        typo_response = self.client.post("/api/policies/active", json={"policyId": "mock_g1_policy"})
+        self.assertEqual(typo_response.status_code, 422)
+        self.assertEqual(self.client.get("/api/session").json()["active_policy_id"], "mock_g1_policy")
+
+        stop_response = self.client.post("/api/policies/active", json={"policy_id": None})
+        self.assertEqual(stop_response.status_code, 200)
+        self.assertIsNone(self.client.get("/api/session").json()["active_policy_id"])
+
+    def test_grouped_validation_matches_legacy_aliases(self) -> None:
+        grouped_seek = self.client.post("/api/session/playback", json={"action": "seek"})
+        legacy_seek = self.client.post("/api/playback/seek", json={})
+        self.assertEqual(grouped_seek.status_code, 422)
+        self.assertEqual(legacy_seek.status_code, 422)
+
+        grouped_trim = self.client.post("/api/session/trim", json={"action": "set_start"})
+        legacy_trim = self.client.post("/api/playback/trim_start", json={})
+        self.assertEqual(grouped_trim.status_code, 422)
+        self.assertEqual(legacy_trim.status_code, 422)
+
+        grouped_step = self.client.post("/api/policies/step", json={})
+        legacy_step = self.client.post("/api/policies/mock_step", json={})
+        self.assertEqual(grouped_step.status_code, 422)
+        self.assertEqual(legacy_step.status_code, 422)
+
 
 class RootPageSmokeTest(unittest.TestCase):
     def setUp(self) -> None:

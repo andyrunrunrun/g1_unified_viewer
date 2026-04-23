@@ -117,10 +117,7 @@ def _handle_policy_active_request(
 
 
 def _handle_policy_step_request(controller: SessionController, request: PolicyStepRequest) -> PolicyOperationResponse:
-    policy_id = request.policy_id or controller.get_session_summary().active_policy_id
-    if policy_id is None:
-        raise ValueError("No active policy")
-    result = controller.step_policy(policy_id, request.snapshot, now=time.monotonic())
+    result = controller.step_policy(request.policy_id, request.snapshot, now=time.monotonic())
     return PolicyOperationResponse(ok=True, message="policy step ok", result=result)
 
 
@@ -357,7 +354,7 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
         try:
             return _handle_policy_active_request(
                 get_controller(),
-                PolicyActivationRequest(),
+                PolicyActivationRequest(policy_id=None),
                 stop_message=f"runner stopped: {request.policy_id}",
             )
         except PolicyError as exc:

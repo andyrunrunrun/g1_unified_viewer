@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 
 SourceType = Literal["dataset", "policy"]
@@ -123,6 +123,15 @@ class SessionPlaybackRequest(BaseModel):
     frame_index: int | None = None
     enabled: bool | None = None
 
+    @root_validator(skip_on_failure=True)
+    def validate_action_payload(cls, values: dict[str, Any]) -> dict[str, Any]:
+        action = values.get("action")
+        if action == "seek" and values.get("frame_index") is None:
+            raise ValueError("frame_index is required for seek")
+        if action == "loop" and values.get("enabled") is None:
+            raise ValueError("enabled is required for loop")
+        return values
+
 
 class LoopRequest(BaseModel):
     enabled: bool
@@ -135,6 +144,13 @@ class TrimFrameRequest(BaseModel):
 class SessionTrimRequest(BaseModel):
     action: Literal["set_start", "set_end", "mark_start", "mark_end"]
     frame_index: int | None = None
+
+    @root_validator(skip_on_failure=True)
+    def validate_action_payload(cls, values: dict[str, Any]) -> dict[str, Any]:
+        action = values.get("action")
+        if action in {"set_start", "set_end"} and values.get("frame_index") is None:
+            raise ValueError(f"frame_index is required for {action}")
+        return values
 
 
 class SessionPhysicsRequest(BaseModel):
@@ -205,7 +221,7 @@ class StartPolicyRequest(BaseModel):
 
 
 class PolicyActivationRequest(BaseModel):
-    policy_id: str | None = None
+    policy_id: str | None
 
 
 class StopPolicyRequest(BaseModel):
@@ -213,7 +229,7 @@ class StopPolicyRequest(BaseModel):
 
 
 class PolicyStepRequest(BaseModel):
-    policy_id: str | None = None
+    policy_id: str
     snapshot: SimulationSnapshot | None = None
 
 
