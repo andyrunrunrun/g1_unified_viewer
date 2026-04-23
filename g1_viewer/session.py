@@ -58,6 +58,7 @@ class SessionController:
         self._policy_state: CanonicalRobotState | None = None
         self._last_policy_result: dict[str, Any] = {}
         self._last_policy_step_time: float | None = None
+        self._policy_started_by_physics = False
         self._policy_step_interval = 1.0 / 30.0
         self._physics_enabled = False
         self._reference_state: CanonicalRobotState | None = None
@@ -150,9 +151,16 @@ class SessionController:
             self._physics_enabled = bool(enabled)
             self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
             if self._physics_enabled and self._active_policy_id is None:
-                self.start_policy("mock_g1_policy", _emit_lifecycle_log=False)
+                self.start_policy(
+                    "mock_g1_policy",
+                    _emit_lifecycle_log=False,
+                    _started_by_physics_toggle=True,
+                )
             elif not self._physics_enabled and self._active_policy_id is not None:
+                stopped_manual_policy = not self._policy_started_by_physics
                 self._stop_policy_locked()
+                if stopped_manual_policy:
+                    self._push_log_locked("policy stopped")
             self._push_log_locked("physics enabled" if self._physics_enabled else "physics disabled")
             return self._build_summary_locked()
 
@@ -196,14 +204,23 @@ class SessionController:
         sequence = self.get_sequence(sequence_id)
         return export_trimmed_sequence(sequence, start_frame, end_frame)
 
-    def start_policy(self, policy_id: str, *, _emit_lifecycle_log: bool = True) -> dict[str, Any]:
+    def start_policy(
+        self,
+        policy_id: str,
+        *,
+        _emit_lifecycle_log: bool = True,
+        _require_active_sequence: bool = True,
+        _started_by_physics_toggle: bool = False,
+    ) -> dict[str, Any]:
         with self._lock:
-            self._require_active_sequence_locked()
+            if _require_active_sequence:
+                self._require_active_sequence_locked()
         result = self._policy_manager.start(policy_id)
         with self._lock:
             self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
             self._physics_enabled = True
             self._active_policy_id = policy_id
+            self._policy_started_by_physics = _started_by_physics_toggle
             self._policy_state = None
             self._last_policy_result = result
             self._last_policy_step_time = None
@@ -220,10 +237,11 @@ class SessionController:
         with self._lock:
             had_active_policy = self._active_policy_id is not None
             was_physics_enabled = self._physics_enabled
+            needs_reset = self._physics_needs_reset or had_active_policy or was_physics_enabled
             self._stop_policy_locked()
             self._clear_physics_state_locked(
                 disable_physics=True,
-                needs_reset=had_active_policy or was_physics_enabled,
+                needs_reset=needs_reset,
             )
             if had_active_policy:
                 self._push_log_locked("policy stopped")
@@ -239,7 +257,7 @@ class SessionController:
         tick_now = time.monotonic() if now is None else now
         with self._lock:
             if self._active_policy_id != policy_id:
-                self.start_policy(policy_id)
+                self.start_policy(policy_id, _require_active_sequence=snapshot is None)
             elif not self._physics_enabled:
                 self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
                 self._physics_enabled = True
@@ -366,6 +384,8 @@ class SessionController:
             self._physics_enabled = False
         self._reference_state = None
         self._simulated_state = None
+        self._policy_state = None
+        self._last_policy_step_time = None
         self._physics_needs_reset = needs_reset
         self._last_observation_summary = {}
         self._last_action_summary = {}
@@ -495,6 +515,7 @@ class SessionController:
         if self._active_policy_id is not None:
             self._policy_manager.stop(self._active_policy_id)
         self._active_policy_id = None
+        self._policy_started_by_physics = False
         self._policy_state = None
         self._last_policy_result = {}
         self._last_policy_step_time = None

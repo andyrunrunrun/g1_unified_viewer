@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from g1_viewer.api import create_app
 from g1_viewer.importers import detect_format as importer_detect_format
+from g1_viewer.models import CanonicalRobotState, SimulationSnapshot
 from g1_viewer.session import SessionController
 
 
@@ -110,6 +112,24 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(summary.last_observation_summary, {})
         self.assertEqual(summary.last_action_summary, {})
 
+    def test_seek_while_physics_on_forces_immediate_policy_refresh(self) -> None:
+        self.controller.toggle_physics(True)
+        initial_state = self.controller.tick(now=10.0)
+        self.controller.seek(2)
+
+        refreshed_state = self.controller.tick(now=10.001)
+        sequence_id = self.controller.get_session_summary().active_sequence.sequence_id
+        frame = self.controller.get_sequence(sequence_id).frames[2]
+        expected = [
+            float(position) + 0.05 * math.sin(10.001 * 2.0 + index * 0.3)
+            for index, position in enumerate(frame.joint_positions)
+        ]
+
+        self.assertNotEqual(initial_state.joint_positions, refreshed_state.joint_positions)
+        self.assertEqual(len(expected), len(refreshed_state.joint_positions))
+        for actual, target in zip(refreshed_state.joint_positions, expected):
+            self.assertAlmostEqual(actual, target, places=6)
+
     def test_toggle_physics_reset_flag_is_consumed_once(self) -> None:
         self.controller.toggle_physics(True)
 
@@ -154,6 +174,27 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertTrue(self.controller.consume_physics_reset_flag())
         self.assertFalse(self.controller.consume_physics_reset_flag())
         self.assertIn("policy stopped", " ".join(summary.last_log_messages).lower())
+
+    def test_repeated_stop_policy_preserves_pending_reset(self) -> None:
+        self.controller.start_policy("mock_g1_policy")
+        self.assertTrue(self.controller.consume_physics_reset_flag())
+
+        self.controller.stop_policy()
+        self.controller.stop_policy()
+
+        self.assertTrue(self.controller.consume_physics_reset_flag())
+        self.assertFalse(self.controller.consume_physics_reset_flag())
+
+    def test_toggle_physics_off_logs_policy_stop_for_manual_policy(self) -> None:
+        self.controller.start_policy("mock_g1_policy")
+
+        summary = self.controller.toggle_physics(False)
+        logs = " ".join(summary.last_log_messages).lower()
+
+        self.assertFalse(summary.physics_enabled)
+        self.assertIsNone(summary.active_policy_id)
+        self.assertIn("policy stopped", logs)
+        self.assertIn("physics disabled", logs)
 
     def test_load_clip_resets_physics_related_session_state(self) -> None:
         self.controller.toggle_physics(True)
@@ -348,6 +389,36 @@ class BrowserApiTest(unittest.TestCase):
             self.assertIn("pack", nodes)
             self.assertEqual(nodes["pack"]["node_type"], "directory")
             self.assertTrue(nodes["pack"]["has_children"])
+
+
+class PolicyStepSnapshotTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+
+    def tearDown(self) -> None:
+        self.controller.shutdown()
+
+    def test_step_policy_with_snapshot_does_not_require_active_clip(self) -> None:
+        snapshot = SimulationSnapshot(
+            timestamp=1.5,
+            state=CanonicalRobotState(
+                timestamp=1.5,
+                root_translation=[0.0, 0.0, 0.78],
+                joint_positions=[0.1, -0.2, 0.3],
+                joint_velocities=[0.0, 0.0, 0.0],
+            ),
+            metadata={"source": "explicit_snapshot"},
+        )
+
+        result = self.controller.step_policy("mock_g1_policy", snapshot=snapshot, now=1.5)
+        summary = self.controller.get_session_summary()
+
+        self.assertEqual(result["mode"], "joint_position_target")
+        self.assertEqual(len(result["values"]), 3)
+        self.assertIsNone(summary.active_sequence)
+        self.assertEqual(summary.active_policy_id, "mock_g1_policy")
+        self.assertTrue(summary.physics_enabled)
+        self.assertEqual(summary.playback_state, "empty")
 
 
 if __name__ == "__main__":
