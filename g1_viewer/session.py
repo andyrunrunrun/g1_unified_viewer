@@ -97,6 +97,12 @@ class SessionController:
         active_item_path = str(Path(path_str).expanduser().resolve())
         with self._lock:
             self._stop_policy_locked()
+            self._physics_enabled = False
+            self._reference_state = None
+            self._simulated_state = None
+            self._physics_needs_reset = False
+            self._last_observation_summary = {}
+            self._last_action_summary = {}
             self._sequences[sequence.sequence_id] = sequence
             self._active_sequence_id = sequence.sequence_id
             self._active_item_path = active_item_path
@@ -154,6 +160,8 @@ class SessionController:
             self._last_action_summary = {}
             if self._physics_enabled and self._active_policy_id is None:
                 self.start_policy("mock_g1_policy")
+            elif not self._physics_enabled and self._active_policy_id is not None:
+                self._stop_policy_locked()
             self._push_log_locked("physics enabled" if self._physics_enabled else "physics disabled")
             return self._build_summary_locked()
 

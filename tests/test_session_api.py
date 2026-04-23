@@ -85,10 +85,14 @@ class SessionStateSourceTest(unittest.TestCase):
     def test_toggle_physics_updates_summary_and_logs(self) -> None:
         summary = self.controller.toggle_physics(True)
         self.assertTrue(summary.physics_enabled)
+        self.assertEqual(summary.active_policy_id, "mock_g1_policy")
+        self.assertEqual(summary.view_mode, "policy")
         self.assertIn("physics enabled", " ".join(summary.last_log_messages).lower())
 
         summary = self.controller.toggle_physics(False)
         self.assertFalse(summary.physics_enabled)
+        self.assertIsNone(summary.active_policy_id)
+        self.assertEqual(summary.view_mode, "dataset")
         self.assertIn("physics disabled", " ".join(summary.last_log_messages).lower())
 
     def test_seek_while_physics_on_keeps_session_state_consistent(self) -> None:
@@ -108,20 +112,17 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertTrue(self.controller.consume_physics_reset_flag())
         self.assertFalse(self.controller.consume_physics_reset_flag())
 
-    def test_physics_reset_paths_clear_reference_and_simulated_state(self) -> None:
+    def test_load_clip_resets_physics_related_session_state(self) -> None:
         self.controller.toggle_physics(True)
-        self.controller._reference_state = object()  # type: ignore[assignment]
-        self.controller._simulated_state = object()  # type: ignore[assignment]
-
         self.controller.seek(1)
-        self.assertIsNone(self.controller._reference_state)
-        self.assertIsNone(self.controller._simulated_state)
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+        summary = self.controller.get_session_summary()
 
-        self.controller._reference_state = object()  # type: ignore[assignment]
-        self.controller._simulated_state = object()  # type: ignore[assignment]
-        self.controller.toggle_physics(False)
-        self.assertIsNone(self.controller._reference_state)
-        self.assertIsNone(self.controller._simulated_state)
+        self.assertFalse(summary.physics_enabled)
+        self.assertIsNone(summary.active_policy_id)
+        self.assertEqual(summary.view_mode, "dataset")
+        self.assertEqual(summary.last_observation_summary, {})
+        self.assertEqual(summary.last_action_summary, {})
 
 
 class ControlPanelApiTest(unittest.TestCase):
