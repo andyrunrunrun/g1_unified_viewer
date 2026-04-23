@@ -80,6 +80,7 @@ class SessionController:
         root, nodes = list_browser_nodes(path_str)
         with self._lock:
             self._catalog_root = root
+            self._items = []
             self._last_error = None
         return root, nodes
 

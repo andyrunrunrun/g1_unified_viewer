@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import unittest
 from pathlib import Path
@@ -167,6 +168,59 @@ class BrowserApiTest(unittest.TestCase):
             response = self.client.post("/api/browser/list", json={"path": str(missing_path)})
             self.assertEqual(response.status_code, 400)
             self.assertIn("Path does not exist", response.text)
+
+    def test_browser_list_keeps_nested_twist2_dirs_expandable(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            pack_dir = temp_root / "pack"
+            sub_dir = pack_dir / "sub"
+            sub_dir.mkdir(parents=True)
+            motion_file = sub_dir / "motion.json"
+            motion_file.write_text(
+                json.dumps(
+                    {
+                        "root_pos": [[0.0, 0.0, 0.0]],
+                        "root_rot": [[0.0, 0.0, 0.0, 1.0]],
+                        "dof_pos": [[0.0]],
+                    }
+                )
+            )
+
+            root_response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+            self.assertEqual(root_response.status_code, 200)
+            root_nodes = {node["name"]: node for node in root_response.json()["nodes"]}
+            self.assertIn("pack", root_nodes)
+            self.assertEqual(root_nodes["pack"]["node_type"], "directory")
+            self.assertTrue(root_nodes["pack"]["has_children"])
+            self.assertNotIn("motion.json", root_nodes)
+
+            pack_response = self.client.post("/api/browser/list", json={"path": str(pack_dir)})
+            self.assertEqual(pack_response.status_code, 200)
+            pack_nodes = {node["name"]: node for node in pack_response.json()["nodes"]}
+            self.assertIn("sub", pack_nodes)
+            self.assertEqual(pack_nodes["sub"]["node_type"], "directory")
+            self.assertTrue(pack_nodes["sub"]["has_children"])
+            self.assertNotIn("motion.json", pack_nodes)
+
+            sub_response = self.client.post("/api/browser/list", json={"path": str(sub_dir)})
+            self.assertEqual(sub_response.status_code, 200)
+            sub_nodes = {node["name"]: node for node in sub_response.json()["nodes"]}
+            self.assertIn("motion.json", sub_nodes)
+            self.assertEqual(sub_nodes["motion.json"]["node_type"], "motion")
+            self.assertEqual(sub_nodes["motion.json"]["format"], "twist2")
+
+    def test_browser_list_clears_stale_session_items_after_scan(self) -> None:
+        scan_response = self.client.post("/api/scan", json={"path": str(SONIC_SAMPLE)})
+        self.assertEqual(scan_response.status_code, 200)
+        self.assertGreater(len(scan_response.json()["items"]), 0)
+
+        sample_root = REPO_ROOT / "examples" / "sample_data"
+        browser_response = self.client.post("/api/browser/list", json={"path": str(sample_root)})
+        self.assertEqual(browser_response.status_code, 200)
+
+        session_response = self.client.get("/api/session")
+        self.assertEqual(session_response.status_code, 200)
+        self.assertEqual(session_response.json()["items"], [])
 
 
 if __name__ == "__main__":

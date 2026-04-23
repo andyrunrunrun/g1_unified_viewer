@@ -16,7 +16,7 @@ def list_browser_nodes(path_str: str) -> tuple[str, list[BrowserNode]]:
     nodes: list[BrowserNode] = []
     for child in sorted(root.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
         motion_format = detect_format(child)
-        if motion_format is not None:
+        if child.is_file() and motion_format is not None:
             nodes.append(
                 BrowserNode(
                     path=str(child),
@@ -28,6 +28,17 @@ def list_browser_nodes(path_str: str) -> tuple[str, list[BrowserNode]]:
             )
             continue
         if child.is_dir():
+            if motion_format == "sonic":
+                nodes.append(
+                    BrowserNode(
+                        path=str(child),
+                        name=child.name,
+                        node_type="motion",
+                        format=motion_format,
+                        has_children=False,
+                    )
+                )
+                continue
             has_children = any(
                 grandchild.is_dir() or detect_format(grandchild) is not None
                 for grandchild in child.iterdir()
