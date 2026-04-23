@@ -97,12 +97,7 @@ class SessionController:
         active_item_path = str(Path(path_str).expanduser().resolve())
         with self._lock:
             self._stop_policy_locked()
-            self._physics_enabled = False
-            self._reference_state = None
-            self._simulated_state = None
-            self._physics_needs_reset = False
-            self._last_observation_summary = {}
-            self._last_action_summary = {}
+            self._clear_physics_state_locked(disable_physics=True, needs_reset=False)
             self._sequences[sequence.sequence_id] = sequence
             self._active_sequence_id = sequence.sequence_id
             self._active_item_path = active_item_path
@@ -153,11 +148,7 @@ class SessionController:
         with self._lock:
             self._require_active_sequence_locked()
             self._physics_enabled = bool(enabled)
-            self._physics_needs_reset = True
-            self._reference_state = None
-            self._simulated_state = None
-            self._last_observation_summary = {}
-            self._last_action_summary = {}
+            self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
             if self._physics_enabled and self._active_policy_id is None:
                 self.start_policy("mock_g1_policy")
             elif not self._physics_enabled and self._active_policy_id is not None:
@@ -172,11 +163,7 @@ class SessionController:
             self._last_playback_time = None
             self._frame_accumulator = 0.0
             if self._physics_enabled:
-                self._physics_needs_reset = True
-                self._reference_state = None
-                self._simulated_state = None
-                self._last_observation_summary = {}
-                self._last_action_summary = {}
+                self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
             self._push_log_locked(f"seek to frame {self._current_frame}")
             return self._build_summary_locked()
 
@@ -226,12 +213,7 @@ class SessionController:
     def stop_policy(self) -> SessionSummary:
         with self._lock:
             self._stop_policy_locked()
-            self._physics_enabled = False
-            self._reference_state = None
-            self._simulated_state = None
-            self._physics_needs_reset = False
-            self._last_observation_summary = {}
-            self._last_action_summary = {}
+            self._clear_physics_state_locked(disable_physics=False, needs_reset=False)
             return self._build_summary_locked()
 
     def step_policy(
@@ -346,6 +328,7 @@ class SessionController:
             trim_end=self._trim_end,
             playback_state=self._playback_state,  # type: ignore[arg-type]
             loop_enabled=self._loop_enabled,
+            # Policy mode is determined by active policy runner, independent from physics mode.
             view_mode="policy" if self._active_policy_id is not None else "dataset",
             active_policy_id=self._active_policy_id,
             viewer_connected=self._viewer_connected,
@@ -361,6 +344,15 @@ class SessionController:
     def _push_log_locked(self, message: str) -> None:
         stamp = time.strftime("%H:%M:%S")
         self._log_messages.appendleft(f"[{stamp}] {message}")
+
+    def _clear_physics_state_locked(self, *, disable_physics: bool, needs_reset: bool) -> None:
+        if disable_physics:
+            self._physics_enabled = False
+        self._reference_state = None
+        self._simulated_state = None
+        self._physics_needs_reset = needs_reset
+        self._last_observation_summary = {}
+        self._last_action_summary = {}
 
     def _require_active_sequence_locked(self) -> StateSequence:
         sequence = self._get_active_sequence_locked()

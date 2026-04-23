@@ -112,11 +112,19 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertTrue(self.controller.consume_physics_reset_flag())
         self.assertFalse(self.controller.consume_physics_reset_flag())
 
+    def test_start_policy_keeps_physics_axis_independent(self) -> None:
+        self.controller.start_policy("mock_g1_policy")
+        summary = self.controller.get_session_summary()
+
+        self.assertFalse(summary.physics_enabled)
+        self.assertEqual(summary.active_policy_id, "mock_g1_policy")
+        self.assertEqual(summary.view_mode, "policy")
+
     def test_stop_policy_after_physics_enable_keeps_summary_coherent(self) -> None:
         self.controller.toggle_physics(True)
         summary = self.controller.stop_policy()
 
-        self.assertFalse(summary.physics_enabled)
+        self.assertTrue(summary.physics_enabled)
         self.assertIsNone(summary.active_policy_id)
         self.assertEqual(summary.view_mode, "dataset")
         self.assertEqual(summary.last_observation_summary, {})
