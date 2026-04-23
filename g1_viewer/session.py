@@ -5,10 +5,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .browser import list_browser_nodes
 from .config import MANIFEST_DIR
 from .exporters import export_trimmed_sequence
 from .importers import load_sequence, scan_path
 from .models import (
+    BrowserNode,
     CanonicalRobotState,
     ScanItem,
     SessionSummary,
@@ -73,6 +75,13 @@ class SessionController:
             self._items = items
             self._last_error = None
             return list(self._items)
+
+    def list_browser(self, path_str: str) -> tuple[str, list[BrowserNode]]:
+        root, nodes = list_browser_nodes(path_str)
+        with self._lock:
+            self._catalog_root = root
+            self._last_error = None
+        return root, nodes
 
     def load_clip(self, path_str: str, format_hint: str | None = None) -> StateSequence:
         sequence = load_sequence(path_str, format_hint)

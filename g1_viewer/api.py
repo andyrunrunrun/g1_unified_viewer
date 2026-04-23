@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .exporters import export_trimmed_sequence
 from .models import (
+    BrowserListRequest,
+    BrowserListResponse,
     FrameSliceResponse,
     GetFramesRequest,
     LoadClipRequest,
@@ -81,6 +83,14 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
     def api_scan(request: ScanRequest) -> ScanResponse:
         try:
             return ScanResponse(items=get_controller().scan_path(request.path))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/browser/list", response_model=BrowserListResponse)
+    def api_browser_list(request: BrowserListRequest) -> BrowserListResponse:
+        try:
+            root, nodes = get_controller().list_browser(request.path)
+            return BrowserListResponse(root=root, nodes=nodes)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

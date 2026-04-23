@@ -83,6 +83,23 @@ class ScanResponse(BaseModel):
     items: list[ScanItem]
 
 
+class BrowserNode(BaseModel):
+    path: str
+    name: str
+    node_type: Literal["directory", "motion"]
+    format: MotionFormat | None = None
+    has_children: bool = False
+
+
+class BrowserListRequest(BaseModel):
+    path: str
+
+
+class BrowserListResponse(BaseModel):
+    root: str
+    nodes: list[BrowserNode]
+
+
 class LoadClipRequest(BaseModel):
     path: str
     format: MotionFormat | None = None

@@ -136,5 +136,35 @@ class ControlPanelApiTest(unittest.TestCase):
         self.assertEqual(summary["current_frame"], 1)
 
 
+class BrowserApiTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.client = TestClient(create_app(self.controller))
+
+    def tearDown(self) -> None:
+        self.client.close()
+        self.controller.shutdown()
+
+    def test_browser_list_returns_directory_and_motion_nodes(self) -> None:
+        sample_root = REPO_ROOT / "examples" / "sample_data"
+        response = self.client.post("/api/browser/list", json={"path": str(sample_root)})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        nodes = {node["name"]: node for node in payload["nodes"]}
+
+        self.assertIn("sonic_demo", nodes)
+        self.assertIn("twist2_demo.pkl", nodes)
+        self.assertEqual(nodes["sonic_demo"]["node_type"], "motion")
+        self.assertEqual(nodes["sonic_demo"]["format"], "sonic")
+        self.assertFalse(nodes["sonic_demo"]["has_children"])
+        self.assertEqual(nodes["twist2_demo.pkl"]["node_type"], "motion")
+        self.assertEqual(nodes["twist2_demo.pkl"]["format"], "twist2")
+
+    def test_browser_list_rejects_missing_root(self) -> None:
+        response = self.client.post("/api/browser/list", json={"path": "/tmp/definitely-missing-root"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Path does not exist", response.text)
+
+
 if __name__ == "__main__":
     unittest.main()
