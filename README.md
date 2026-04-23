@@ -15,6 +15,35 @@
 - 不依赖 `GR00T-WholeBodyControl`
 - G1 的 MuJoCo 资产已经内置在 `assets/g1/`
 
+## 架构边界
+
+- `SessionController`
+  - 单一状态源，统一持有浏览树、动作加载、播放、trim、physics、policy、viewer 摘要和诊断信息
+- `HTTP API + native viewer`
+  - `HTTP API` 负责控制、自动化和网页面板入口
+  - `native viewer` 负责 MuJoCo 渲染、本地高频快捷键和 physics runtime
+
+当前控制面板已经优先使用 grouped session endpoint：
+
+- `/api/session/load`
+- `/api/session/playback`
+- `/api/session/trim`
+- `/api/session/physics`
+- `/api/policies/active`
+- `/api/policies/step`
+
+旧的 `/api/load_clip`、`/api/playback/*`、`/api/policies/start|stop|mock_step` 仍然保留为兼容别名，但都会收敛到同一套 controller 逻辑。
+
+## Physics OFF / ON
+
+- `Physics OFF`
+  - native viewer 直接回放 reference state
+  - 网页面板只消费 `SessionController` 汇总后的 session summary
+- `Physics ON`
+  - runtime 从 `SessionController` 读取 reference target 和 reset 信号
+  - policy runner 读取 `robot_state + reference_target`
+  - MuJoCo step 和 observation/action 摘要回写到 `SessionController`
+
 ## 当前能力
 
 目前已经支持：

@@ -18,18 +18,24 @@ def main() -> int:
 
     client = TestClient(app)
 
-    scan = client.post("/api/scan", json={"path": str(sample_path)})
-    print("scan:", scan.status_code, scan.json())
+    browser = client.post("/api/browser/list", json={"path": str(sample_path.parent)})
+    print("browser:", browser.status_code, browser.json()["root"])
 
-    load = client.post("/api/load_clip", json={"path": str(sample_path), "format": "sonic"})
+    load = client.post("/api/session/load", json={"path": str(sample_path), "format": "sonic"})
     sequence = load.json()["sequence"]
     print("load:", load.status_code, sequence)
+
+    seek = client.post("/api/session/playback", json={"action": "seek", "frame_index": 1})
+    print("seek:", seek.status_code, seek.json()["current_frame"])
 
     sequence_id = sequence["sequence_id"]
     render = client.get(f"/api/render_frame/{sequence_id}/0")
     output_png.parent.mkdir(parents=True, exist_ok=True)
     output_png.write_bytes(render.content)
     print("render:", render.status_code, render.headers.get("x-renderer-backend"), output_png)
+
+    trim_session = client.post("/api/session/trim", json={"action": "set_start", "frame_index": 1})
+    print("trim session:", trim_session.status_code, trim_session.json()["trim_start"])
 
     trim = client.post(
         "/api/trim_export",

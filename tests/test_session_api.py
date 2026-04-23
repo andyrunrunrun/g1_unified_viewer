@@ -413,6 +413,15 @@ class RootPageSmokeTest(unittest.TestCase):
         self.assertIn("Action", body)
 
 
+class ReadmeSmokeTest(unittest.TestCase):
+    def test_readme_mentions_dual_interface_and_physics_modes(self) -> None:
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("HTTP API + native viewer", readme)
+        self.assertIn("SessionController", readme)
+        self.assertIn("Physics OFF", readme)
+        self.assertIn("Physics ON", readme)
+
+
 class BrowserApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SessionController()

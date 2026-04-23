@@ -20,7 +20,27 @@ def main() -> int:
     manager = PolicyRunnerManager(registry)
 
     sequence = load_sequence(str(sample_path))
-    snapshot = SimulationSnapshot(timestamp=sequence.frames[0].timestamp, state=sequence.frames[0])
+    policy_inputs = {
+        "robot_state": {
+            "root_position": sequence.frames[0].root_translation,
+            "root_rotation_wxyz": sequence.frames[0].root_rotation_wxyz,
+            "joint_positions": sequence.frames[0].joint_positions,
+            "joint_velocities": sequence.frames[0].joint_velocities,
+        },
+        "reference_target": {
+            "target_root_position": sequence.frames[0].root_translation,
+            "target_root_rotation_wxyz": sequence.frames[0].root_rotation_wxyz,
+            "target_joint_positions": sequence.frames[0].joint_positions,
+            "target_joint_velocities": sequence.frames[0].joint_velocities,
+        },
+        "frame_index": 0,
+        "dt": 0.0,
+    }
+    snapshot = SimulationSnapshot(
+        timestamp=sequence.frames[0].timestamp,
+        state=sequence.frames[0],
+        metadata={"policy_inputs": policy_inputs},
+    )
 
     print("available policies:", [policy.policy_id for policy in manager.list_policies()])
     print("start:", manager.start("mock_g1_policy"))
