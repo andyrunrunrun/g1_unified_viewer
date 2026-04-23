@@ -7,7 +7,7 @@
     <style>
       :root {
         --bg: #efe7db;
-        --panel: rgba(255, 251, 245, 0.82);
+        --panel: rgba(255, 251, 245, 0.84);
         --line: rgba(41, 44, 56, 0.12);
         --ink: #1f2431;
         --soft: #5f677a;
@@ -15,6 +15,7 @@
         --accent-strong: #8e3e1e;
         --ok: #227a4d;
         --warn: #995d12;
+        --danger: #ad3122;
       }
 
       * {
@@ -34,7 +35,6 @@
       .shell {
         min-height: 100vh;
         display: grid;
-        grid-template-rows: auto 1fr;
         gap: 18px;
         padding: 18px;
       }
@@ -49,9 +49,9 @@
       }
 
       .hero {
-        padding: 20px 22px;
         display: grid;
-        gap: 10px;
+        gap: 14px;
+        padding: 20px 22px;
       }
 
       .hero h1 {
@@ -62,8 +62,15 @@
 
       .hero p {
         margin: 0;
+        max-width: 920px;
         color: var(--soft);
-        max-width: 900px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) repeat(8, auto);
+        gap: 10px;
+        align-items: center;
       }
 
       .hero-bar {
@@ -84,9 +91,19 @@
         color: var(--ok);
       }
 
-      .layout {
+      .badge.warn {
+        color: var(--warn);
+      }
+
+      .main-grid {
         display: grid;
-        grid-template-columns: 320px minmax(0, 1fr) 320px;
+        grid-template-columns: 340px minmax(0, 1fr) 340px;
+        gap: 18px;
+      }
+
+      .bottom-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 18px;
       }
 
@@ -105,33 +122,20 @@
         gap: 12px;
       }
 
-      .input-row,
-      .toolbar,
-      .grid-2,
-      .grid-3 {
+      .grid-2 {
         display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
       }
 
-      .input-row {
-        grid-template-columns: 1fr auto;
-      }
-
-      .toolbar {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      .grid-2 {
+      .stat-grid {
+        display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .grid-3 {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
       }
 
       input,
-      button,
-      textarea {
+      button {
         font: inherit;
       }
 
@@ -146,11 +150,17 @@
         color: var(--ink);
       }
 
+      input[type="range"] {
+        padding: 0;
+        accent-color: var(--accent);
+      }
+
       button {
         border: 0;
         border-radius: 14px;
         padding: 10px 14px;
         cursor: pointer;
+        white-space: nowrap;
         color: white;
         background: linear-gradient(135deg, var(--accent), var(--accent-strong));
         box-shadow: 0 10px 24px rgba(142, 62, 30, 0.22);
@@ -168,6 +178,12 @@
         box-shadow: none;
       }
 
+      button:disabled,
+      input:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
       .hint,
       .status {
         color: var(--soft);
@@ -176,16 +192,18 @@
       }
 
       .status.error {
-        color: #ad3122;
+        color: var(--danger);
       }
 
-      .list {
+      .tree,
+      .policy-list {
         display: grid;
         gap: 8px;
-        max-height: 55vh;
+        max-height: 52vh;
         overflow: auto;
       }
 
+      .tree-node,
       .card {
         border-radius: 18px;
         border: 1px solid var(--line);
@@ -193,56 +211,67 @@
         background: rgba(255, 255, 255, 0.66);
       }
 
+      .tree-node {
+        padding-left: calc(12px + var(--depth, 0) * 16px);
+        font-size: 14px;
+        word-break: break-all;
+      }
+
+      .tree-node.directory,
+      .tree-node.motion,
+      .card {
+        cursor: pointer;
+      }
+
+      .tree-node.directory {
+        color: var(--accent-strong);
+      }
+
+      .tree-node.active,
       .card.active {
         border-color: rgba(198, 91, 47, 0.45);
         box-shadow: inset 0 0 0 1px rgba(198, 91, 47, 0.22);
       }
 
-      .card .title {
-        font-weight: 700;
-        font-size: 14px;
-      }
-
-      .card .meta {
-        margin-top: 4px;
-        font-size: 12px;
-        color: var(--soft);
-        word-break: break-all;
-      }
-
-      .stats {
+      .tree-children {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+        gap: 8px;
       }
 
-      .stat {
+      .hidden {
+        display: none;
+      }
+
+      .stat,
+      .note {
         border-radius: 18px;
         border: 1px solid var(--line);
         padding: 12px;
         background: rgba(255, 255, 255, 0.52);
       }
 
-      .stat .label {
-        font-size: 12px;
+      .stat .label,
+      .card .meta {
         color: var(--soft);
+        font-size: 12px;
       }
 
-      .stat .value {
+      .stat .value,
+      .card .title {
         margin-top: 6px;
-        font-size: 18px;
         font-weight: 700;
       }
 
-      .note {
-        padding: 14px;
-        border-radius: 18px;
-        border: 1px dashed rgba(31, 36, 49, 0.18);
-        background: rgba(255, 255, 255, 0.42);
+      .card .meta {
+        margin-top: 5px;
+        word-break: break-all;
       }
 
       pre {
         margin: 0;
+        min-height: 108px;
+        max-height: 260px;
+        overflow: auto;
         padding: 14px;
         border-radius: 18px;
         border: 1px solid var(--line);
@@ -254,23 +283,12 @@
         font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
       }
 
-      ul {
-        margin: 0;
-        padding-left: 18px;
-      }
-
-      li + li {
-        margin-top: 6px;
-      }
-
-      @media (max-width: 1220px) {
-        .layout {
-          grid-template-columns: 1fr;
-        }
-
+      @media (max-width: 1280px) {
         .toolbar,
+        .main-grid,
+        .bottom-grid,
         .grid-2,
-        .grid-3 {
+        .stat-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -279,130 +297,100 @@
   <body>
     <div class="shell">
       <header class="hero">
-        <h1>G1 Unified Viewer 控制面板</h1>
-        <p>
-          主可视化窗口在 MuJoCo 原生 viewer 中。这个网页只负责扫描数据、切换动作、控制播放、裁剪导出和切换策略。
-        </p>
+        <div>
+          <h1>G1 Unified Viewer 控制面板</h1>
+          <p>主可视化窗口保留在 MuJoCo 原生 viewer 中。这个网页只作为 SessionController 的薄诊断客户端。</p>
+        </div>
+
+        <div class="toolbar">
+          <input id="pathInput" type="text" placeholder="输入数据根目录" />
+          <button id="scanButton">扫描</button>
+          <button id="playButton">播放</button>
+          <button class="secondary" id="pauseButton">暂停</button>
+          <button class="secondary" id="stopButton">停止</button>
+          <button class="secondary" id="physicsToggleButton">Physics OFF</button>
+          <button id="startPolicyButton">启动策略</button>
+          <button class="secondary" id="stopPolicyButton">停止策略</button>
+          <button class="secondary" id="exportButton">导出裁剪</button>
+        </div>
+
         <div class="hero-bar">
           <span class="badge" id="viewerBadge">Viewer 未连接</span>
           <span class="badge" id="modeBadge">模式: dataset</span>
           <span class="badge" id="playbackBadge">播放: empty</span>
           <span class="badge" id="policyBadge">策略: -</span>
+          <span class="badge" id="physicsBadge">Physics OFF</span>
         </div>
       </header>
 
-      <div class="layout">
-        <aside class="panel stack">
+      <div class="main-grid">
+        <aside class="panel tree-panel stack">
           <div>
-            <h2>数据集扫描</h2>
-            <div class="input-row">
-              <input id="pathInput" type="text" placeholder="输入 sonic 目录、TWIST2 文件或更上层扫描根目录" />
-              <button id="scanButton">扫描</button>
-            </div>
-            <div class="hint">点击左侧条目会直接加载到 MuJoCo 原生窗口。</div>
+            <h2>动作文件树</h2>
+            <div class="hint">目录按需展开，动作节点点击后通过 grouped session API 加载。</div>
           </div>
-          <div class="status" id="scanStatus">尚未扫描。</div>
-          <div class="list" id="scanResults"></div>
+          <div class="status" id="treeStatus">输入数据根目录后扫描。</div>
+          <div class="tree" id="treeRoot"></div>
         </aside>
 
-        <main class="panel stack">
+        <main class="panel center-panel stack">
           <section class="stack">
             <div>
-              <h2>播放控制</h2>
-              <div class="hint">当前网页不渲染主图像，请直接在 MuJoCo 原生窗口里拖动视角、缩放和旋转。</div>
+              <h2>当前动作</h2>
+              <div class="hint">时间线和裁剪控件只提交命令，状态由会话摘要回填。</div>
             </div>
-            <div class="stats">
-              <div class="stat">
-                <div class="label">当前动作</div>
-                <div class="value" id="clipName">未加载</div>
-              </div>
-              <div class="stat">
-                <div class="label">当前帧</div>
-                <div class="value" id="frameValue">0 / 0</div>
-              </div>
-              <div class="stat">
-                <div class="label">FPS</div>
-                <div class="value" id="fpsValue">-</div>
-              </div>
-              <div class="stat">
-                <div class="label">裁剪区间</div>
-                <div class="value" id="trimValue">0 → 0</div>
-              </div>
-            </div>
-
-            <div class="toolbar">
-              <button id="playButton">播放</button>
-              <button class="secondary" id="pauseButton">暂停</button>
-              <button class="secondary" id="stopButton">停止</button>
-            </div>
-
+            <div class="stat-grid" id="clipSummary"></div>
+            <input id="timeline" type="range" min="0" max="0" value="0" disabled />
             <div class="grid-2">
-              <button class="ghost" id="prevClipButton">上一条</button>
-              <button class="ghost" id="nextClipButton">下一条</button>
-            </div>
-
-            <input id="timeline" type="range" min="0" max="0" value="0" />
-
-            <div class="grid-3">
-              <input id="frameInput" type="number" min="0" value="0" />
+              <input id="frameInput" type="number" min="0" value="0" disabled />
               <button class="secondary" id="seekButton">跳转到帧</button>
-              <button class="secondary" id="loopButton">切换循环</button>
             </div>
-
-            <div class="grid-3">
-              <input id="trimStartInput" type="number" min="0" value="0" />
-              <input id="trimEndInput" type="number" min="0" value="0" />
-              <button id="exportButton">导出裁剪</button>
-            </div>
-
             <div class="grid-2">
-              <button class="secondary" id="markTrimStartButton">当前帧设为起点</button>
-              <button class="secondary" id="markTrimEndButton">当前帧设为终点</button>
+              <input id="trimStartInput" type="number" min="0" value="0" disabled />
+              <input id="trimEndInput" type="number" min="0" value="0" disabled />
             </div>
-
-            <div class="status" id="playbackStatus">等待操作。</div>
-          </section>
-
-          <section class="note">
-            <strong>MuJoCo 原生快捷键</strong>
-            <ul>
-              <li><code>Space</code> 播放或暂停</li>
-              <li><code>Left</code> / <code>Right</code> 单帧前后跳</li>
-              <li><code>R</code> 回到第 0 帧</li>
-              <li><code>[</code> / <code>]</code> 把当前帧标为裁剪起止</li>
-              <li><code>N</code> / <code>P</code> 切换下一条或上一条动作</li>
-              <li><code>L</code> 切换循环播放</li>
-            </ul>
-          </section>
-
-          <section class="stack">
-            <h3>当前会话</h3>
-            <pre id="detailPane">等待会话状态...</pre>
+            <div class="grid-2">
+              <button class="ghost" id="markTrimStartButton">当前帧设为起点</button>
+              <button class="ghost" id="markTrimEndButton">当前帧设为终点</button>
+            </div>
+            <div class="note" id="trimSummary">裁剪区间: 0 至 0</div>
+            <div class="status" id="commandStatus">等待操作。</div>
           </section>
         </main>
 
-        <aside class="panel stack">
+        <aside class="panel inspector-panel stack">
           <div>
-            <h2>策略控制</h2>
-            <div class="hint">当前支持统一子进程接口。控制面板负责启动、停止和发一步测试命令，真正的可视化仍在 MuJoCo 原生窗口。</div>
+            <h2>策略与检查器</h2>
+            <div class="hint">策略启动、停止和单步测试使用 grouped policy endpoints。</div>
           </div>
-          <div class="grid-2">
-            <button class="secondary" id="refreshPoliciesButton">刷新策略</button>
-            <button class="secondary" id="stepPolicyButton">单步测试</button>
-          </div>
-          <div class="grid-2">
-            <button id="startPolicyButton">启动策略</button>
-            <button class="secondary" id="stopPolicyButton">停止策略</button>
-          </div>
-          <div class="status" id="policyStatus">尚未选择策略。</div>
-          <div class="list" id="policyResults"></div>
-
+          <button class="secondary" id="stepPolicyButton">单步测试</button>
+          <div class="status" id="policyStatus">策略清单加载中。</div>
+          <div class="policy-list" id="policyList"></div>
           <section class="stack">
-            <h3>相机状态</h3>
+            <h3>Policy</h3>
+            <pre id="policyPane">等待会话状态...</pre>
+          </section>
+          <section class="stack">
+            <h3>Camera</h3>
             <pre id="cameraPane">等待 MuJoCo viewer 连接...</pre>
           </section>
         </aside>
       </div>
+
+      <section class="bottom-grid">
+        <div class="panel stack">
+          <h3>日志</h3>
+          <pre id="logPane">暂无日志。</pre>
+        </div>
+        <div class="panel stack">
+          <h3>Observation</h3>
+          <pre id="observationPane">{}</pre>
+        </div>
+        <div class="panel stack">
+          <h3>Action</h3>
+          <pre id="actionPane">{}</pre>
+        </div>
+      </section>
     </div>
 
     <script>
@@ -410,48 +398,46 @@
         session: null,
         policies: [],
         selectedPolicyId: null,
-        pendingStatus: "",
         pollHandle: null,
-        seekDebounce: null,
       };
 
       const pathInput = document.getElementById("pathInput");
       const scanButton = document.getElementById("scanButton");
-      const scanStatus = document.getElementById("scanStatus");
-      const scanResults = document.getElementById("scanResults");
+      const playButton = document.getElementById("playButton");
+      const pauseButton = document.getElementById("pauseButton");
+      const stopButton = document.getElementById("stopButton");
+      const physicsToggleButton = document.getElementById("physicsToggleButton");
+      const startPolicyButton = document.getElementById("startPolicyButton");
+      const stopPolicyButton = document.getElementById("stopPolicyButton");
+      const exportButton = document.getElementById("exportButton");
+      const stepPolicyButton = document.getElementById("stepPolicyButton");
 
       const viewerBadge = document.getElementById("viewerBadge");
       const modeBadge = document.getElementById("modeBadge");
       const playbackBadge = document.getElementById("playbackBadge");
       const policyBadge = document.getElementById("policyBadge");
-      const clipName = document.getElementById("clipName");
-      const frameValue = document.getElementById("frameValue");
-      const fpsValue = document.getElementById("fpsValue");
-      const trimValue = document.getElementById("trimValue");
+      const physicsBadge = document.getElementById("physicsBadge");
+
+      const treeRoot = document.getElementById("treeRoot");
+      const treeStatus = document.getElementById("treeStatus");
+      const clipSummary = document.getElementById("clipSummary");
       const timeline = document.getElementById("timeline");
       const frameInput = document.getElementById("frameInput");
       const seekButton = document.getElementById("seekButton");
       const trimStartInput = document.getElementById("trimStartInput");
       const trimEndInput = document.getElementById("trimEndInput");
-      const playButton = document.getElementById("playButton");
-      const pauseButton = document.getElementById("pauseButton");
-      const stopButton = document.getElementById("stopButton");
-      const prevClipButton = document.getElementById("prevClipButton");
-      const nextClipButton = document.getElementById("nextClipButton");
-      const loopButton = document.getElementById("loopButton");
-      const exportButton = document.getElementById("exportButton");
       const markTrimStartButton = document.getElementById("markTrimStartButton");
       const markTrimEndButton = document.getElementById("markTrimEndButton");
-      const playbackStatus = document.getElementById("playbackStatus");
-      const detailPane = document.getElementById("detailPane");
+      const trimSummary = document.getElementById("trimSummary");
+      const commandStatus = document.getElementById("commandStatus");
 
-      const refreshPoliciesButton = document.getElementById("refreshPoliciesButton");
-      const stepPolicyButton = document.getElementById("stepPolicyButton");
-      const startPolicyButton = document.getElementById("startPolicyButton");
-      const stopPolicyButton = document.getElementById("stopPolicyButton");
       const policyStatus = document.getElementById("policyStatus");
-      const policyResults = document.getElementById("policyResults");
+      const policyList = document.getElementById("policyList");
+      const policyPane = document.getElementById("policyPane");
       const cameraPane = document.getElementById("cameraPane");
+      const logPane = document.getElementById("logPane");
+      const observationPane = document.getElementById("observationPane");
+      const actionPane = document.getElementById("actionPane");
 
       async function postJson(url, payload) {
         const options = { method: "POST" };
@@ -461,8 +447,7 @@
         }
         const response = await fetch(url, options);
         if (!response.ok) {
-          const text = await response.text();
-          throw new Error(text);
+          throw new Error(await response.text());
         }
         return response.json();
       }
@@ -470,28 +455,30 @@
       async function fetchJson(url) {
         const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) {
-          const text = await response.text();
-          throw new Error(text);
+          throw new Error(await response.text());
         }
         return response.json();
       }
 
-      function setPlaybackStatus(text, isError = false) {
-        playbackStatus.textContent = text;
-        playbackStatus.className = `status${isError ? " error" : ""}`;
+      function setStatus(element, text, isError = false) {
+        element.textContent = text;
+        element.className = `status${isError ? " error" : ""}`;
       }
 
-      function setPolicyStatus(text, isError = false) {
-        policyStatus.textContent = text;
-        policyStatus.className = `status${isError ? " error" : ""}`;
+      function formatJson(value) {
+        return JSON.stringify(value ?? {}, null, 2);
       }
 
       function activeSequence() {
-        return state.session && state.session.active_sequence ? state.session.active_sequence : null;
+        return state.session?.active_sequence ?? null;
       }
 
       function activePolicyId() {
-        return state.session ? state.session.active_policy_id : null;
+        return state.session?.active_policy_id ?? null;
+      }
+
+      function selectedPolicyId() {
+        return state.selectedPolicyId || activePolicyId() || state.policies[0]?.policy_id || null;
       }
 
       async function refreshSession() {
@@ -499,7 +486,7 @@
           state.session = await fetchJson("/api/session");
           renderSession();
         } catch (error) {
-          setPlaybackStatus(error.message, true);
+          setStatus(commandStatus, error.message, true);
         }
       }
 
@@ -507,9 +494,81 @@
         try {
           const payload = await fetchJson("/api/policies");
           state.policies = payload.policies;
+          if (!state.selectedPolicyId && state.policies.length > 0) {
+            state.selectedPolicyId = state.policies[0].policy_id;
+          }
           renderPolicies();
         } catch (error) {
-          setPolicyStatus(error.message, true);
+          setStatus(policyStatus, error.message, true);
+        }
+      }
+
+      async function runCommand(operation, successText, statusElement = commandStatus) {
+        try {
+          await operation();
+          await refreshSession();
+          setStatus(statusElement, successText);
+        } catch (error) {
+          setStatus(statusElement, error.message, true);
+        }
+      }
+
+      async function loadTree(path, container, depth = 0) {
+        const payload = await postJson("/api/browser/list", { path });
+        for (const node of payload.nodes) {
+          const row = document.createElement("div");
+          row.className = `tree-node ${node.node_type}`;
+          row.dataset.path = node.path;
+          row.style.setProperty("--depth", String(depth));
+          row.textContent = `${node.node_type === "directory" ? "[dir]" : "[motion]"} ${node.name}`;
+
+          if (node.node_type === "directory" && node.has_children) {
+            row.addEventListener("click", async () => {
+              if (row.dataset.loaded === "true") {
+                row.nextElementSibling?.classList.toggle("hidden");
+                return;
+              }
+              try {
+                const childContainer = document.createElement("div");
+                childContainer.className = "tree-children";
+                row.after(childContainer);
+                await loadTree(node.path, childContainer, depth + 1);
+                row.dataset.loaded = "true";
+              } catch (error) {
+                setStatus(treeStatus, error.message, true);
+              }
+            });
+          }
+
+          if (node.node_type === "motion") {
+            row.addEventListener("click", async () => {
+              await runCommand(
+                async () => {
+                  await postJson("/api/session/load", { path: node.path, format: node.format });
+                },
+                `已加载 ${node.name}`,
+              );
+            });
+          }
+
+          container.appendChild(row);
+        }
+        return payload;
+      }
+
+      async function scanTree() {
+        const path = pathInput.value.trim();
+        if (!path) {
+          setStatus(treeStatus, "请输入数据根目录。", true);
+          return;
+        }
+        try {
+          treeRoot.innerHTML = "";
+          setStatus(treeStatus, "扫描目录中...");
+          const payload = await loadTree(path, treeRoot);
+          setStatus(treeStatus, `根目录: ${payload.root}，节点数: ${payload.nodes.length}`);
+        } catch (error) {
+          setStatus(treeStatus, error.message, true);
         }
       }
 
@@ -520,20 +579,49 @@
         }
 
         const sequence = activeSequence();
-        const frameCount = sequence ? sequence.frame_count : 0;
-        const maxFrame = Math.max(0, frameCount - 1);
-        const viewerClass = session.viewer_connected ? "badge ok" : "badge";
+        const maxFrame = Math.max(0, (sequence?.frame_count ?? 0) - 1);
+        const activePath = session.active_item_path || sequence?.source_path || "";
 
-        viewerBadge.className = viewerClass;
+        viewerBadge.className = session.viewer_connected ? "badge ok" : "badge";
         viewerBadge.textContent = session.viewer_connected ? "Viewer 已连接" : "Viewer 未连接";
         modeBadge.textContent = `模式: ${session.view_mode}`;
         playbackBadge.textContent = `播放: ${session.playback_state}`;
         policyBadge.textContent = `策略: ${session.active_policy_id || "-"}`;
+        physicsBadge.className = session.physics_enabled ? "badge warn" : "badge";
+        physicsBadge.textContent = session.physics_enabled ? "Physics ON" : "Physics OFF";
 
-        clipName.textContent = sequence ? sequence.name : "未加载";
-        frameValue.textContent = `${session.current_frame} / ${maxFrame}`;
-        fpsValue.textContent = sequence ? Number(sequence.fps).toFixed(2) : "-";
-        trimValue.textContent = `${session.trim_start} → ${session.trim_end}`;
+        renderClipSummary(session, sequence, maxFrame);
+        renderDiagnostics(session);
+
+        document.querySelectorAll(".tree-node.motion").forEach((row) => {
+          row.classList.toggle("active", row.dataset.path === activePath);
+        });
+
+        if (session.last_error) {
+          setStatus(commandStatus, session.last_error, true);
+        }
+      }
+
+      function renderClipSummary(session, sequence, maxFrame) {
+        const entries = [
+          ["名称", sequence ? sequence.name : "未加载"],
+          ["格式", sequence ? sequence.source_format : "-"],
+          ["当前帧", `${session.current_frame} / ${maxFrame}`],
+          ["FPS", sequence ? Number(sequence.fps).toFixed(2) : "-"],
+        ];
+        clipSummary.innerHTML = "";
+        for (const [label, value] of entries) {
+          const stat = document.createElement("div");
+          stat.className = "stat";
+          const labelNode = document.createElement("div");
+          labelNode.className = "label";
+          labelNode.textContent = label;
+          const valueNode = document.createElement("div");
+          valueNode.className = "value";
+          valueNode.textContent = value;
+          stat.append(labelNode, valueNode);
+          clipSummary.appendChild(stat);
+        }
 
         timeline.max = String(maxFrame);
         timeline.value = String(Math.min(session.current_frame, maxFrame));
@@ -542,6 +630,7 @@
         frameInput.max = String(maxFrame);
         frameInput.value = String(session.current_frame);
         frameInput.disabled = !sequence;
+        seekButton.disabled = !sequence;
 
         trimStartInput.max = String(maxFrame);
         trimStartInput.value = String(session.trim_start);
@@ -551,238 +640,161 @@
         trimEndInput.value = String(session.trim_end);
         trimEndInput.disabled = !sequence;
 
-        loopButton.textContent = session.loop_enabled ? "关闭循环" : "开启循环";
-        scanStatus.textContent = session.catalog_root
-          ? `扫描根目录: ${session.catalog_root}，共 ${session.items.length} 条候选动作`
-          : "尚未扫描。";
-        detailPane.textContent = JSON.stringify(session, null, 2);
-        cameraPane.textContent = session.viewer_camera
-          ? JSON.stringify(session.viewer_camera, null, 2)
-          : "等待 MuJoCo viewer 连接...";
-
-        if (!state.selectedPolicyId && session.active_policy_id) {
-          state.selectedPolicyId = session.active_policy_id;
-        }
-
-        if (session.last_error) {
-          setPlaybackStatus(session.last_error, true);
-        }
-
-        renderScanResults();
-        renderPolicies();
+        markTrimStartButton.disabled = !sequence;
+        markTrimEndButton.disabled = !sequence;
+        exportButton.disabled = !sequence;
+        trimSummary.textContent = `裁剪区间: ${session.trim_start} 至 ${session.trim_end}`;
       }
 
-      function renderScanResults() {
-        scanResults.innerHTML = "";
-        const session = state.session;
-        if (!session || !session.items.length) {
-          return;
-        }
-
-        for (const item of session.items) {
-          const card = document.createElement("div");
-          const isActive = session.active_item_path === item.path;
-          card.className = `card${isActive || isSelected ? " active" : ""}`;
-          card.innerHTML = `
-            <div class="title">${item.name}</div>
-            <div class="meta">${item.format} • ${item.item_type}</div>
-            <div class="meta">${item.path}</div>
-          `;
-          card.addEventListener("click", async () => {
-            try {
-              setPlaybackStatus(`加载 ${item.name}...`);
-              await postJson("/api/load_clip", { path: item.path, format: item.format });
-              await refreshSession();
-              setPlaybackStatus(`已加载 ${item.name}`);
-            } catch (error) {
-              setPlaybackStatus(error.message, true);
-            }
-          });
-          scanResults.appendChild(card);
-        }
+      function renderDiagnostics(session) {
+        physicsToggleButton.textContent = session.physics_enabled ? "Physics ON" : "Physics OFF";
+        logPane.textContent = session.last_log_messages.length > 0 ? session.last_log_messages.join("\n") : "暂无日志。";
+        observationPane.textContent = formatJson(session.last_observation_summary);
+        actionPane.textContent = formatJson(session.last_action_summary);
+        policyPane.textContent = formatJson({
+          active_policy_id: session.active_policy_id,
+          physics_enabled: session.physics_enabled,
+          last_policy_result: session.last_policy_result,
+          last_error: session.last_error,
+        });
+        cameraPane.textContent = session.viewer_camera
+          ? formatJson({ connected: session.viewer_connected, camera: session.viewer_camera })
+          : "等待 MuJoCo viewer 连接...";
       }
 
       function renderPolicies() {
-        policyResults.innerHTML = "";
+        policyList.innerHTML = "";
+        if (state.policies.length === 0) {
+          policyList.textContent = "没有可用策略。";
+          return;
+        }
+
         for (const policy of state.policies) {
           const card = document.createElement("div");
           const isActive = activePolicyId() === policy.policy_id;
-          const isSelected = state.selectedPolicyId === policy.policy_id;
-          card.className = `card${isActive ? " active" : ""}`;
-          card.innerHTML = `
-            <div class="title">${policy.display_name}</div>
-            <div class="meta">${policy.policy_id} • ${policy.control_mode}</div>
-            <div class="meta">${isSelected ? "已选中" : isActive ? "运行中" : "未启动"}</div>
-            <div class="meta">${policy.description || "无描述"}</div>
-          `;
+          const isSelected = selectedPolicyId() === policy.policy_id;
+          card.className = `card${isActive || isSelected ? " active" : ""}`;
+
+          const title = document.createElement("div");
+          title.className = "title";
+          title.textContent = policy.display_name;
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = `${policy.policy_id} / ${policy.control_mode}`;
+          const description = document.createElement("div");
+          description.className = "meta";
+          description.textContent = policy.description || "无描述";
+
+          card.append(title, meta, description);
           card.addEventListener("click", () => {
             state.selectedPolicyId = policy.policy_id;
-            policyStatus.textContent = `已选择策略 ${policy.policy_id}`;
+            setStatus(policyStatus, `已选择策略 ${policy.policy_id}`);
             renderPolicies();
           });
-          policyResults.appendChild(card);
+          policyList.appendChild(card);
         }
       }
 
-      function selectedPolicyId() {
-        return state.selectedPolicyId || activePolicyId() || (state.policies[0] ? state.policies[0].policy_id : null);
+      async function togglePhysics() {
+        const enabled = !(state.session?.physics_enabled ?? false);
+        await postJson("/api/session/physics", { enabled });
       }
 
-      async function scanPath() {
-        try {
-          setPlaybackStatus("扫描路径中...");
-          await postJson("/api/scan", { path: pathInput.value });
-          await refreshSession();
-          setPlaybackStatus("扫描完成。");
-        } catch (error) {
-          setPlaybackStatus(error.message, true);
+      async function activateSelectedPolicy() {
+        const policyId = selectedPolicyId();
+        if (!policyId) {
+          throw new Error("没有可启动的策略。");
         }
+        await postJson("/api/policies/active", { policy_id: policyId });
       }
 
-      async function callSessionEndpoint(url, payload, successText) {
-        try {
-          await postJson(url, payload);
-          await refreshSession();
-          setPlaybackStatus(successText);
-        } catch (error) {
-          setPlaybackStatus(error.message, true);
+      async function stepSelectedPolicy() {
+        const policyId = selectedPolicyId();
+        if (!policyId) {
+          throw new Error("没有可测试的策略。");
         }
+        await postJson("/api/policies/step", { policy_id: policyId });
       }
 
       async function exportTrim() {
         const sequence = activeSequence();
         if (!sequence) {
-          setPlaybackStatus("请先加载动作。", true);
-          return;
+          throw new Error("请先加载动作。");
         }
-        try {
-          const payload = await postJson("/api/trim_export", {
-            sequence_id: sequence.sequence_id,
-            start_frame: Number(trimStartInput.value),
-            end_frame: Number(trimEndInput.value),
-          });
-          await refreshSession();
-          setPlaybackStatus(`已导出到 ${payload.output_path}`);
-        } catch (error) {
-          setPlaybackStatus(error.message, true);
-        }
+        const payload = await postJson("/api/trim_export", {
+          sequence_id: sequence.sequence_id,
+          start_frame: Number(trimStartInput.value),
+          end_frame: Number(trimEndInput.value),
+        });
+        setStatus(commandStatus, `已导出到 ${payload.output_path}`);
       }
 
-      async function startPolicy() {
-        const policyId = selectedPolicyId();
-        if (!policyId) {
-          setPolicyStatus("没有可启动的策略。", true);
-          return;
-        }
-        try {
-          await postJson("/api/policies/start", { policy_id: policyId });
-          await refreshSession();
-          setPolicyStatus(`已启动 ${policyId}`);
-        } catch (error) {
-          setPolicyStatus(error.message, true);
-        }
-      }
-
-      async function stopPolicy() {
-        const policyId = selectedPolicyId();
-        if (!policyId) {
-          setPolicyStatus("当前没有活动策略。", true);
-          return;
-        }
-        try {
-          await postJson("/api/policies/stop", { policy_id: policyId });
-          await refreshSession();
-          setPolicyStatus(`已停止 ${policyId}`);
-        } catch (error) {
-          setPolicyStatus(error.message, true);
-        }
-      }
-
-      async function stepPolicy() {
-        const policyId = selectedPolicyId();
-        if (!policyId) {
-          setPolicyStatus("没有可测试的策略。", true);
-          return;
-        }
-        try {
-          const payload = await postJson("/api/policies/mock_step", { policy_id: policyId });
-          await refreshSession();
-          setPolicyStatus(`单步执行完成: ${policyId}`);
-          detailPane.textContent = JSON.stringify(payload.result, null, 2);
-        } catch (error) {
-          setPolicyStatus(error.message, true);
-        }
-      }
-
-      function neighborItem(offset) {
-        const session = state.session;
-        if (!session || !session.items.length) {
-          return null;
-        }
-        const currentIndex = session.items.findIndex((item) => item.path === session.active_item_path);
-        if (currentIndex < 0) {
-          return session.items[0];
-        }
-        return session.items[(currentIndex + offset + session.items.length) % session.items.length];
-      }
-
-      async function jumpNeighbor(offset) {
-        const item = neighborItem(offset);
-        if (!item) {
-          setPlaybackStatus("没有可切换的动作。", true);
-          return;
-        }
-        try {
-          await postJson("/api/load_clip", { path: item.path, format: item.format });
-          await refreshSession();
-          setPlaybackStatus(`已切换到 ${item.name}`);
-        } catch (error) {
-          setPlaybackStatus(error.message, true);
-        }
-      }
-
-      scanButton.addEventListener("click", scanPath);
-      playButton.addEventListener("click", () => callSessionEndpoint("/api/playback/play", undefined, "开始播放。"));
-      pauseButton.addEventListener("click", () => callSessionEndpoint("/api/playback/pause", undefined, "已暂停。"));
-      stopButton.addEventListener("click", () => callSessionEndpoint("/api/playback/stop", undefined, "已停止。"));
-      loopButton.addEventListener("click", () => {
-        const enabled = !(state.session && state.session.loop_enabled);
-        callSessionEndpoint("/api/playback/loop", { enabled }, enabled ? "已开启循环。" : "已关闭循环。");
+      scanButton.addEventListener("click", scanTree);
+      playButton.addEventListener("click", () =>
+        runCommand(() => postJson("/api/session/playback", { action: "play" }), "开始播放。"),
+      );
+      pauseButton.addEventListener("click", () =>
+        runCommand(() => postJson("/api/session/playback", { action: "pause" }), "已暂停。"),
+      );
+      stopButton.addEventListener("click", () =>
+        runCommand(() => postJson("/api/session/playback", { action: "stop" }), "已停止。"),
+      );
+      physicsToggleButton.addEventListener("click", () =>
+        runCommand(togglePhysics, "Physics 状态已更新。"),
+      );
+      startPolicyButton.addEventListener("click", () =>
+        runCommand(
+          activateSelectedPolicy,
+          "策略已启动。",
+          policyStatus,
+        ),
+      );
+      stopPolicyButton.addEventListener("click", () =>
+        runCommand(
+          () => postJson("/api/policies/active", { policy_id: null }),
+          "策略已停止。",
+          policyStatus,
+        ),
+      );
+      stepPolicyButton.addEventListener("click", () =>
+        runCommand(
+          stepSelectedPolicy,
+          "策略单步完成。",
+          policyStatus,
+        ),
+      );
+      seekButton.addEventListener("click", () =>
+        runCommand(
+          () => postJson("/api/session/playback", { action: "seek", frame_index: Number(frameInput.value) }),
+          `已跳到第 ${frameInput.value} 帧。`,
+        ),
+      );
+      timeline.addEventListener("input", async () => {
+        frameInput.value = timeline.value;
+        await runCommand(
+          () => postJson("/api/session/playback", { action: "seek", frame_index: Number(timeline.value) }),
+          `已跳到第 ${timeline.value} 帧。`,
+        );
       });
-      seekButton.addEventListener("click", () => {
-        callSessionEndpoint("/api/playback/seek", { frame_index: Number(frameInput.value) }, `已跳到第 ${frameInput.value} 帧。`);
-      });
-      exportButton.addEventListener("click", exportTrim);
-      markTrimStartButton.addEventListener("click", () => {
-        callSessionEndpoint("/api/playback/trim_start", { frame_index: Number(frameInput.value) }, "已更新裁剪起点。");
-      });
-      markTrimEndButton.addEventListener("click", () => {
-        callSessionEndpoint("/api/playback/trim_end", { frame_index: Number(frameInput.value) }, "已更新裁剪终点。");
-      });
-      prevClipButton.addEventListener("click", () => jumpNeighbor(-1));
-      nextClipButton.addEventListener("click", () => jumpNeighbor(1));
-
-      timeline.addEventListener("input", (event) => {
-        frameInput.value = String(Number(event.target.value));
-        if (state.seekDebounce) {
-          clearTimeout(state.seekDebounce);
-        }
-        state.seekDebounce = setTimeout(() => {
-          callSessionEndpoint("/api/playback/seek", { frame_index: Number(event.target.value) }, `已跳到第 ${event.target.value} 帧。`);
-        }, 80);
-      });
-
-      trimStartInput.addEventListener("change", (event) => {
-        callSessionEndpoint("/api/playback/trim_start", { frame_index: Number(event.target.value) }, "已更新裁剪起点。");
-      });
-      trimEndInput.addEventListener("change", (event) => {
-        callSessionEndpoint("/api/playback/trim_end", { frame_index: Number(event.target.value) }, "已更新裁剪终点。");
-      });
-
-      refreshPoliciesButton.addEventListener("click", refreshPolicies);
-      startPolicyButton.addEventListener("click", startPolicy);
-      stopPolicyButton.addEventListener("click", stopPolicy);
-      stepPolicyButton.addEventListener("click", stepPolicy);
+      trimStartInput.addEventListener("change", () =>
+        runCommand(
+          () => postJson("/api/session/trim", { action: "set_start", frame_index: Number(trimStartInput.value) }),
+          "已更新裁剪起点。",
+        ),
+      );
+      trimEndInput.addEventListener("change", () =>
+        runCommand(
+          () => postJson("/api/session/trim", { action: "set_end", frame_index: Number(trimEndInput.value) }),
+          "已更新裁剪终点。",
+        ),
+      );
+      markTrimStartButton.addEventListener("click", () =>
+        runCommand(() => postJson("/api/session/trim", { action: "mark_start" }), "已标记裁剪起点。"),
+      );
+      markTrimEndButton.addEventListener("click", () =>
+        runCommand(() => postJson("/api/session/trim", { action: "mark_end" }), "已标记裁剪终点。"),
+      );
+      exportButton.addEventListener("click", () => runCommand(exportTrim, "裁剪导出完成。"));
 
       async function bootstrap() {
         await refreshSession();

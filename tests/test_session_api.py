@@ -365,6 +365,26 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(response.json()["current_frame"], 2)
 
 
+class RootPageSmokeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.client = TestClient(create_app(self.controller))
+
+    def tearDown(self) -> None:
+        self.client.close()
+        self.controller.shutdown()
+
+    def test_root_page_contains_tree_physics_and_diagnostics_sections(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertIn("动作文件树", body)
+        self.assertIn("Physics OFF", body)
+        self.assertIn("日志", body)
+        self.assertIn("Observation", body)
+        self.assertIn("Action", body)
+
+
 class BrowserApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SessionController()
