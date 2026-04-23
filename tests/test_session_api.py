@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 
@@ -161,9 +162,11 @@ class BrowserApiTest(unittest.TestCase):
         self.assertEqual(nodes["twist2_demo.pkl"]["format"], "twist2")
 
     def test_browser_list_rejects_missing_root(self) -> None:
-        response = self.client.post("/api/browser/list", json={"path": "/tmp/definitely-missing-root"})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Path does not exist", response.text)
+        with TemporaryDirectory() as temp_dir:
+            missing_path = Path(temp_dir) / "never-created-child"
+            response = self.client.post("/api/browser/list", json={"path": str(missing_path)})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("Path does not exist", response.text)
 
 
 if __name__ == "__main__":
