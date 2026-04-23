@@ -226,6 +226,12 @@ class SessionController:
     def stop_policy(self) -> SessionSummary:
         with self._lock:
             self._stop_policy_locked()
+            self._physics_enabled = False
+            self._reference_state = None
+            self._simulated_state = None
+            self._physics_needs_reset = False
+            self._last_observation_summary = {}
+            self._last_action_summary = {}
             return self._build_summary_locked()
 
     def step_policy(

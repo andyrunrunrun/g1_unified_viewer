@@ -112,6 +112,16 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertTrue(self.controller.consume_physics_reset_flag())
         self.assertFalse(self.controller.consume_physics_reset_flag())
 
+    def test_stop_policy_after_physics_enable_keeps_summary_coherent(self) -> None:
+        self.controller.toggle_physics(True)
+        summary = self.controller.stop_policy()
+
+        self.assertFalse(summary.physics_enabled)
+        self.assertIsNone(summary.active_policy_id)
+        self.assertEqual(summary.view_mode, "dataset")
+        self.assertEqual(summary.last_observation_summary, {})
+        self.assertEqual(summary.last_action_summary, {})
+
     def test_load_clip_resets_physics_related_session_state(self) -> None:
         self.controller.toggle_physics(True)
         self.controller.seek(1)
