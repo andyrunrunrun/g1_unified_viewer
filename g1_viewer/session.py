@@ -199,6 +199,7 @@ class SessionController:
     def start_policy(self, policy_id: str) -> dict[str, Any]:
         result = self._policy_manager.start(policy_id)
         with self._lock:
+            self._physics_enabled = True
             self._active_policy_id = policy_id
             self._policy_state = None
             self._last_policy_result = result
@@ -213,7 +214,7 @@ class SessionController:
     def stop_policy(self) -> SessionSummary:
         with self._lock:
             self._stop_policy_locked()
-            self._clear_physics_state_locked(disable_physics=False, needs_reset=False)
+            self._clear_physics_state_locked(disable_physics=True, needs_reset=False)
             return self._build_summary_locked()
 
     def step_policy(
@@ -227,6 +228,7 @@ class SessionController:
         with self._lock:
             if self._active_policy_id != policy_id:
                 self.start_policy(policy_id)
+            self._physics_enabled = True
             base_state = snapshot.state if snapshot is not None else self._dataset_state_locked(tick_now)
             policy_snapshot = snapshot or self._build_snapshot_locked(base_state, tick_now)
             result = self._policy_manager.step(policy_id, policy_snapshot)
