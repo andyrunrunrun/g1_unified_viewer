@@ -362,7 +362,7 @@ class SessionController:
             trim_end=self._trim_end,
             playback_state=self._playback_state,  # type: ignore[arg-type]
             loop_enabled=self._loop_enabled,
-            # Policy mode is determined by active policy runner, independent from physics mode.
+            # Public lifecycle methods keep policy activity and physics mode aligned.
             view_mode="policy" if self._active_policy_id is not None else "dataset",
             active_policy_id=self._active_policy_id,
             viewer_connected=self._viewer_connected,
@@ -385,6 +385,7 @@ class SessionController:
         self._reference_state = None
         self._simulated_state = None
         self._policy_state = None
+        self._last_policy_result = {}
         self._last_policy_step_time = None
         self._physics_needs_reset = needs_reset
         self._last_observation_summary = {}

@@ -116,6 +116,7 @@ class SessionStateSourceTest(unittest.TestCase):
         self.controller.toggle_physics(True)
         initial_state = self.controller.tick(now=10.0)
         self.controller.seek(2)
+        summary_after_seek = self.controller.get_session_summary()
 
         refreshed_state = self.controller.tick(now=10.001)
         sequence_id = self.controller.get_session_summary().active_sequence.sequence_id
@@ -126,6 +127,7 @@ class SessionStateSourceTest(unittest.TestCase):
         ]
 
         self.assertNotEqual(initial_state.joint_positions, refreshed_state.joint_positions)
+        self.assertEqual(summary_after_seek.last_policy_result, {})
         self.assertEqual(len(expected), len(refreshed_state.joint_positions))
         for actual, target in zip(refreshed_state.joint_positions, expected):
             self.assertAlmostEqual(actual, target, places=6)
