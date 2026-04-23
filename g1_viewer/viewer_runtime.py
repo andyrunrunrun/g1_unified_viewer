@@ -10,6 +10,7 @@ import numpy as np
 
 from .config import resolve_g1_model_path
 from .models import CanonicalRobotState
+from .physics import compute_pd_torque_targets, reset_data_to_state, state_from_data
 from .session import SessionController
 
 
@@ -43,11 +44,33 @@ class NativeViewerRuntime:
             self._configure_camera(handle.cam)
             try:
                 while handle.is_running():
-                    state = self.controller.tick()
                     summary = self.controller.get_session_summary()
+                    tick_now = time.monotonic()
                     with handle.lock():
-                        self._apply_state(state)
-                        mujoco.mj_forward(self.model, self.data)
+                        if summary.physics_enabled:
+                            if self.controller.consume_physics_reset_flag():
+                                reference_state = self.controller.reference_state(now=tick_now)
+                                reset_data_to_state(self.model, self.data, reference_state)
+                                mujoco.mj_forward(self.model, self.data)
+
+                            joint_count = min(self.model.nu, self.model.nq - 7, self.model.nv - 6)
+                            robot_state = state_from_data(self.data, joint_count=joint_count)
+                            robot_state.timestamp = tick_now
+                            action = self.controller.physics_step(robot_state, now=tick_now)
+                            ctrl = compute_pd_torque_targets(self.data, action["values"])
+                            if self.data.ctrl.size > 0:
+                                self.data.ctrl[:] = 0.0
+                                self.data.ctrl[: len(ctrl)] = ctrl[: self.data.ctrl.size]
+                            mujoco.mj_step(self.model, self.data)
+                            simulated_state = state_from_data(self.data, joint_count=joint_count)
+                            simulated_state.timestamp = tick_now
+                            self.controller.update_simulated_state(simulated_state)
+                        else:
+                            state = self.controller.tick(now=tick_now)
+                            self._apply_state(state)
+                            mujoco.mj_forward(self.model, self.data)
+
+                        summary = self.controller.get_session_summary()
                         handle.set_texts(
                             [
                                 (

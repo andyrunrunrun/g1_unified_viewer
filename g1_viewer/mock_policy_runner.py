@@ -36,13 +36,37 @@ def _describe() -> dict:
         "policy_id": "mock_g1_policy",
         "display_name": "Mock G1 Policy",
         "robot_type": "g1",
-        "observation_spec": {"input": "SimulationSnapshot"},
+        "observation_spec": {
+            "robot_state": ["root_position", "root_rotation_wxyz", "joint_positions", "joint_velocities"],
+            "reference_target": [
+                "target_root_position",
+                "target_root_rotation_wxyz",
+                "target_joint_positions",
+                "target_joint_velocities",
+            ],
+            "extras": ["frame_index", "dt"],
+        },
         "action_spec": {"mode": "joint_position_target"},
     }
 
 
 def _step(payload: dict) -> dict:
     snapshot = payload.get("snapshot", {})
+    metadata = snapshot.get("metadata", {})
+    policy_inputs = metadata.get("policy_inputs", {})
+    reference_target = policy_inputs.get("reference_target", {})
+    if reference_target:
+        values = [float(value) for value in reference_target.get("target_joint_positions", [])]
+        return {
+            "mode": "joint_position_target",
+            "values": values,
+            "metadata": {
+                "runner": "mock",
+                "frame_index": policy_inputs.get("frame_index", 0),
+                "dt": policy_inputs.get("dt", 0.0),
+            },
+        }
+
     state = snapshot.get("state", {})
     joint_positions = state.get("joint_positions", [])
     timestamp = float(snapshot.get("timestamp", 0.0))
@@ -88,4 +112,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

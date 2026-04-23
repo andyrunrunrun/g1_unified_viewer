@@ -184,6 +184,73 @@ class SessionController:
             self._physics_needs_reset = False
             return should_reset
 
+    def reference_state(self, now: float | None = None) -> CanonicalRobotState:
+        tick_now = time.monotonic() if now is None else now
+        with self._lock:
+            state = self._dataset_state_locked(tick_now)
+            self._reference_state = _clone_state(state)
+            return state
+
+    def simulated_state(self) -> CanonicalRobotState | None:
+        with self._lock:
+            if self._simulated_state is None:
+                return None
+            return _clone_state(self._simulated_state)
+
+    def physics_step(
+        self,
+        robot_state: CanonicalRobotState,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        tick_now = time.monotonic() if now is None else now
+        with self._lock:
+            sequence = self._require_active_sequence_locked()
+            reference_state = self._dataset_state_locked(tick_now)
+            self._reference_state = _clone_state(reference_state)
+            self._simulated_state = _clone_state(robot_state)
+            if self._active_policy_id is None:
+                self.start_policy(
+                    "mock_g1_policy",
+                    _emit_lifecycle_log=False,
+                    _started_by_physics_toggle=True,
+                )
+            self._physics_enabled = True
+
+            dt = 0.0 if self._last_policy_step_time is None else max(0.0, tick_now - self._last_policy_step_time)
+            policy_inputs = self._build_policy_inputs_locked(robot_state, reference_state, dt)
+            self._last_observation_summary = policy_inputs
+            snapshot = SimulationSnapshot(
+                timestamp=tick_now,
+                state=_clone_state(robot_state),
+                metadata={
+                    "sequence_id": sequence.sequence_id,
+                    "frame_index": self._current_frame,
+                    "policy_inputs": policy_inputs,
+                },
+            )
+
+            try:
+                result = self._policy_manager.step(self._active_policy_id, snapshot)
+            except Exception as exc:
+                self._last_error = str(exc)
+                raise
+
+            values = [float(value) for value in result.get("values", [])]
+            self._last_policy_result = result
+            self._last_policy_step_time = tick_now
+            self._last_action_summary = {
+                "mode": result.get("mode", "unknown"),
+                "value_count": len(values),
+                "first_values": values[:6],
+            }
+            self._last_error = None
+            return {
+                "mode": result.get("mode", "joint_position_target"),
+                "values": values,
+                "metadata": dict(result.get("metadata", {})),
+            }
+
     def set_loop(self, enabled: bool) -> SessionSummary:
         with self._lock:
             self._loop_enabled = bool(enabled)
@@ -328,6 +395,10 @@ class SessionController:
     def mark_viewer_connected(self, connected: bool) -> None:
         with self._lock:
             self._viewer_connected = connected
+
+    def update_simulated_state(self, state: CanonicalRobotState) -> None:
+        with self._lock:
+            self._simulated_state = _clone_state(state)
 
     def update_camera(
         self,
@@ -483,6 +554,29 @@ class SessionController:
                 }
             )
         return SimulationSnapshot(timestamp=now, state=_clone_state(base_state), metadata=metadata)
+
+    def _build_policy_inputs_locked(
+        self,
+        robot_state: CanonicalRobotState,
+        reference_state: CanonicalRobotState,
+        dt: float,
+    ) -> dict[str, Any]:
+        return {
+            "robot_state": {
+                "root_position": list(robot_state.root_translation),
+                "root_rotation_wxyz": list(robot_state.root_rotation_wxyz),
+                "joint_positions": list(robot_state.joint_positions),
+                "joint_velocities": list(robot_state.joint_velocities),
+            },
+            "reference_target": {
+                "target_root_position": list(reference_state.root_translation),
+                "target_root_rotation_wxyz": list(reference_state.root_rotation_wxyz),
+                "target_joint_positions": list(reference_state.joint_positions),
+                "target_joint_velocities": list(reference_state.joint_velocities),
+            },
+            "frame_index": self._current_frame,
+            "dt": dt,
+        }
 
     def _apply_policy_result_locked(
         self,

@@ -450,5 +450,49 @@ class PolicyStepSnapshotTest(unittest.TestCase):
         self.assertNotEqual(state.joint_positions, [])
 
 
+class MockPolicyContractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+        self.controller.toggle_physics(True)
+
+    def tearDown(self) -> None:
+        self.controller.shutdown()
+
+    def test_mock_policy_uses_robot_state_and_reference_target(self) -> None:
+        result = self.controller.physics_step(self.controller.reference_state(), now=time.monotonic())
+        summary = self.controller.get_session_summary()
+
+        self.assertEqual(result["mode"], "joint_position_target")
+        self.assertIn("robot_state", summary.last_observation_summary)
+        self.assertIn("reference_target", summary.last_observation_summary)
+        self.assertIn("target_joint_positions", summary.last_observation_summary["reference_target"])
+        self.assertEqual(
+            len(result["values"]),
+            len(summary.last_observation_summary["reference_target"]["target_joint_positions"]),
+        )
+
+
+class PhysicsRuntimeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+        self.controller.toggle_physics(True)
+
+    def tearDown(self) -> None:
+        self.controller.shutdown()
+
+    def test_physics_step_populates_action_and_observation_summaries(self) -> None:
+        robot_state = self.controller.reference_state()
+        result = self.controller.physics_step(robot_state, now=time.monotonic())
+        summary = self.controller.get_session_summary()
+
+        self.assertTrue(summary.physics_enabled)
+        self.assertEqual(result["mode"], "joint_position_target")
+        self.assertIn("robot_state", summary.last_observation_summary)
+        self.assertEqual(summary.last_action_summary["mode"], "joint_position_target")
+        self.assertGreater(summary.last_action_summary["value_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
