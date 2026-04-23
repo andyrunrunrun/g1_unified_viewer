@@ -210,6 +210,15 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(summary.last_observation_summary, {})
         self.assertEqual(summary.last_action_summary, {})
 
+    def test_load_clip_logs_policy_stop_for_manual_policy(self) -> None:
+        self.controller.start_policy("mock_g1_policy")
+
+        summary = self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+        logs = " ".join(self.controller.get_session_summary().last_log_messages).lower()
+
+        self.assertEqual(summary.source_format, "twist2")
+        self.assertIn("policy stopped", logs)
+
 
 class ControlPanelApiTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -421,6 +430,24 @@ class PolicyStepSnapshotTest(unittest.TestCase):
         self.assertEqual(summary.active_policy_id, "mock_g1_policy")
         self.assertTrue(summary.physics_enabled)
         self.assertEqual(summary.playback_state, "empty")
+
+    def test_tick_after_snapshot_step_keeps_snapshot_state_as_base(self) -> None:
+        snapshot = SimulationSnapshot(
+            timestamp=1.5,
+            state=CanonicalRobotState(
+                timestamp=1.5,
+                root_translation=[0.0, 0.0, 0.78],
+                joint_positions=[0.1, -0.2, 0.3],
+                joint_velocities=[0.0, 0.0, 0.0],
+            ),
+            metadata={"source": "explicit_snapshot"},
+        )
+
+        self.controller.step_policy("mock_g1_policy", snapshot=snapshot, now=1.5)
+        state = self.controller.tick(now=1.6)
+
+        self.assertEqual(len(state.joint_positions), 3)
+        self.assertNotEqual(state.joint_positions, [])
 
 
 if __name__ == "__main__":

@@ -97,6 +97,7 @@ class SessionController:
         sequence = load_sequence(path_str, format_hint)
         active_item_path = str(Path(path_str).expanduser().resolve())
         with self._lock:
+            stopped_manual_policy = self._active_policy_id is not None and not self._policy_started_by_physics
             self._stop_policy_locked()
             self._clear_physics_state_locked(disable_physics=True, needs_reset=False)
             self._sequences[sequence.sequence_id] = sequence
@@ -109,6 +110,8 @@ class SessionController:
             self._last_playback_time = None
             self._frame_accumulator = 0.0
             self._last_error = None
+            if stopped_manual_policy:
+                self._push_log_locked("policy stopped")
             return sequence
 
     def get_sequence(self, sequence_id: str) -> StateSequence:
@@ -299,7 +302,7 @@ class SessionController:
             if self._playback_state == "playing":
                 self._advance_playback_locked(tick_now)
 
-            base_state = self._dataset_state_locked(tick_now)
+            base_state = self._base_state_for_tick_locked(tick_now)
             if self._active_policy_id is None:
                 return base_state
 
@@ -401,6 +404,13 @@ class SessionController:
         if self._active_sequence_id is None:
             return None
         return self._sequences.get(self._active_sequence_id)
+
+    def _base_state_for_tick_locked(self, now: float) -> CanonicalRobotState:
+        if self._get_active_sequence_locked() is None and self._policy_state is not None:
+            state = _clone_state(self._policy_state)
+            state.timestamp = now
+            return state
+        return self._dataset_state_locked(now)
 
     def _advance_playback_locked(self, now: float) -> None:
         sequence = self._get_active_sequence_locked()
