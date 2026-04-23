@@ -326,6 +326,45 @@ class ControlPanelApiTest(unittest.TestCase):
         self.assertEqual(summary["current_frame"], 1)
 
 
+class GroupedApiTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.client = TestClient(create_app(self.controller))
+
+    def tearDown(self) -> None:
+        self.client.close()
+        self.controller.shutdown()
+
+    def test_grouped_session_and_policy_endpoints_share_state(self) -> None:
+        load = self.client.post("/api/session/load", json={"path": str(SONIC_SAMPLE), "format": "sonic"})
+        self.assertEqual(load.status_code, 200)
+
+        seek = self.client.post("/api/session/playback", json={"action": "seek", "frame_index": 1})
+        self.assertEqual(seek.status_code, 200)
+        self.assertEqual(seek.json()["current_frame"], 1)
+
+        trim = self.client.post("/api/session/trim", json={"action": "set_start", "frame_index": 1})
+        self.assertEqual(trim.status_code, 200)
+        self.assertEqual(trim.json()["trim_start"], 1)
+
+        physics = self.client.post("/api/session/physics", json={"enabled": True})
+        self.assertEqual(physics.status_code, 200)
+        self.assertTrue(physics.json()["physics_enabled"])
+
+        activate = self.client.post("/api/policies/active", json={"policy_id": "mock_g1_policy"})
+        self.assertEqual(activate.status_code, 200)
+
+        step = self.client.post("/api/policies/step", json={"policy_id": "mock_g1_policy"})
+        self.assertEqual(step.status_code, 200)
+        self.assertIn("mode", step.json()["result"])
+
+    def test_legacy_playback_seek_alias_still_works(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(SONIC_SAMPLE), "format": "sonic"})
+        response = self.client.post("/api/playback/seek", json={"frame_index": 2})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["current_frame"], 2)
+
+
 class BrowserApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SessionController()

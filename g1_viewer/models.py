@@ -105,6 +105,11 @@ class LoadClipRequest(BaseModel):
     format: MotionFormat | None = None
 
 
+class SessionLoadRequest(BaseModel):
+    path: str
+    format: MotionFormat | None = None
+
+
 class LoadClipResponse(BaseModel):
     sequence: SequenceSummary
 
@@ -113,12 +118,27 @@ class SeekRequest(BaseModel):
     frame_index: int
 
 
+class SessionPlaybackRequest(BaseModel):
+    action: Literal["play", "pause", "stop", "seek", "loop"]
+    frame_index: int | None = None
+    enabled: bool | None = None
+
+
 class LoopRequest(BaseModel):
     enabled: bool
 
 
 class TrimFrameRequest(BaseModel):
     frame_index: int
+
+
+class SessionTrimRequest(BaseModel):
+    action: Literal["set_start", "set_end", "mark_start", "mark_end"]
+    frame_index: int | None = None
+
+
+class SessionPhysicsRequest(BaseModel):
+    enabled: bool
 
 
 class GetFramesRequest(BaseModel):
@@ -184,8 +204,17 @@ class StartPolicyRequest(BaseModel):
     policy_id: str
 
 
+class PolicyActivationRequest(BaseModel):
+    policy_id: str | None = None
+
+
 class StopPolicyRequest(BaseModel):
     policy_id: str
+
+
+class PolicyStepRequest(BaseModel):
+    policy_id: str | None = None
+    snapshot: SimulationSnapshot | None = None
 
 
 class MockStepRequest(BaseModel):
