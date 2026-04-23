@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import threading
 import time
 from pathlib import Path
@@ -58,6 +59,13 @@ class SessionController:
         self._last_policy_result: dict[str, Any] = {}
         self._last_policy_step_time: float | None = None
         self._policy_step_interval = 1.0 / 30.0
+        self._physics_enabled = False
+        self._reference_state: CanonicalRobotState | None = None
+        self._simulated_state: CanonicalRobotState | None = None
+        self._physics_needs_reset = False
+        self._last_observation_summary: dict[str, Any] = {}
+        self._last_action_summary: dict[str, Any] = {}
+        self._log_messages: deque[str] = deque(maxlen=12)
 
         self._viewer_connected = False
         self._viewer_camera: ViewerCameraState | None = None
@@ -135,12 +143,31 @@ class SessionController:
             self._frame_accumulator = 0.0
             return self._build_summary_locked()
 
+    def toggle_physics(self, enabled: bool) -> SessionSummary:
+        with self._lock:
+            self._require_active_sequence_locked()
+            self._physics_enabled = bool(enabled)
+            self._physics_needs_reset = True
+            self._simulated_state = None
+            self._last_observation_summary = {}
+            self._last_action_summary = {}
+            if self._physics_enabled and self._active_policy_id is None:
+                self.start_policy("mock_g1_policy")
+            self._push_log_locked("physics enabled" if self._physics_enabled else "physics disabled")
+            return self._build_summary_locked()
+
     def seek(self, frame_index: int) -> SessionSummary:
         with self._lock:
             sequence = self._require_active_sequence_locked()
             self._current_frame = min(max(frame_index, 0), sequence.frame_count - 1)
             self._last_playback_time = None
             self._frame_accumulator = 0.0
+            if self._physics_enabled:
+                self._physics_needs_reset = True
+                self._simulated_state = None
+                self._last_observation_summary = {}
+                self._last_action_summary = {}
+            self._push_log_locked(f"seek to frame {self._current_frame}")
             return self._build_summary_locked()
 
     def set_loop(self, enabled: bool) -> SessionSummary:
@@ -302,8 +329,16 @@ class SessionController:
             viewer_connected=self._viewer_connected,
             viewer_camera=self._viewer_camera,
             last_policy_result=dict(self._last_policy_result),
+            physics_enabled=self._physics_enabled,
+            last_observation_summary=dict(self._last_observation_summary),
+            last_action_summary=dict(self._last_action_summary),
+            last_log_messages=list(self._log_messages),
             last_error=self._last_error,
         )
+
+    def _push_log_locked(self, message: str) -> None:
+        stamp = time.strftime("%H:%M:%S")
+        self._log_messages.appendleft(f"[{stamp}] {message}")
 
     def _require_active_sequence_locked(self) -> StateSequence:
         sequence = self._get_active_sequence_locked()

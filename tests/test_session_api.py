@@ -74,6 +74,35 @@ class SessionControllerTest(unittest.TestCase):
         self.assertIsNone(stopped.active_policy_id)
 
 
+class SessionStateSourceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.controller.load_clip(str(SONIC_SAMPLE), "sonic")
+
+    def tearDown(self) -> None:
+        self.controller.shutdown()
+
+    def test_toggle_physics_updates_summary_and_logs(self) -> None:
+        summary = self.controller.toggle_physics(True)
+        self.assertTrue(summary.physics_enabled)
+        self.assertIn("physics enabled", " ".join(summary.last_log_messages).lower())
+
+        summary = self.controller.toggle_physics(False)
+        self.assertFalse(summary.physics_enabled)
+        self.assertIn("physics disabled", " ".join(summary.last_log_messages).lower())
+
+    def test_seek_while_physics_on_keeps_session_state_consistent(self) -> None:
+        self.controller.toggle_physics(True)
+        self.controller.seek(2)
+        summary = self.controller.get_session_summary()
+
+        self.assertTrue(summary.physics_enabled)
+        self.assertEqual(summary.current_frame, 2)
+        self.assertIn("seek", " ".join(summary.last_log_messages).lower())
+        self.assertEqual(summary.last_observation_summary, {})
+        self.assertEqual(summary.last_action_summary, {})
+
+
 class ControlPanelApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SessionController()

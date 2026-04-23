@@ -208,6 +208,10 @@ class SessionSummary(BaseModel):
     viewer_connected: bool = False
     viewer_camera: ViewerCameraState | None = None
     last_policy_result: dict[str, Any] = Field(default_factory=dict)
+    physics_enabled: bool = False
+    last_observation_summary: dict[str, Any] = Field(default_factory=dict)
+    last_action_summary: dict[str, Any] = Field(default_factory=dict)
+    last_log_messages: list[str] = Field(default_factory=list)
     last_error: str | None = None
 
 
