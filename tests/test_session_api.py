@@ -5,10 +5,12 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from g1_viewer.api import create_app
+from g1_viewer.importers import detect_format as importer_detect_format
 from g1_viewer.session import SessionController
 
 
@@ -221,6 +223,37 @@ class BrowserApiTest(unittest.TestCase):
         session_response = self.client.get("/api/session")
         self.assertEqual(session_response.status_code, 200)
         self.assertEqual(session_response.json()["items"], [])
+
+    def test_browser_list_does_not_detect_format_on_directories(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            pack_dir = temp_root / "pack"
+            sub_dir = pack_dir / "sub"
+            sub_dir.mkdir(parents=True)
+            motion_file = sub_dir / "motion.json"
+            motion_file.write_text(
+                json.dumps(
+                    {
+                        "root_pos": [[0.0, 0.0, 0.0]],
+                        "root_rot": [[0.0, 0.0, 0.0, 1.0]],
+                        "dof_pos": [[0.0]],
+                    }
+                )
+            )
+
+            def detect_format_guard(path: Path) -> str | None:
+                if path.is_dir():
+                    raise AssertionError(f"detect_format called on directory: {path}")
+                return importer_detect_format(path)
+
+            with patch("g1_viewer.browser.detect_format", side_effect=detect_format_guard):
+                response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            nodes = {node["name"]: node for node in response.json()["nodes"]}
+            self.assertIn("pack", nodes)
+            self.assertEqual(nodes["pack"]["node_type"], "directory")
+            self.assertTrue(nodes["pack"]["has_children"])
 
 
 if __name__ == "__main__":

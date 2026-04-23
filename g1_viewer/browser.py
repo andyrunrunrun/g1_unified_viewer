@@ -6,6 +6,10 @@ from .importers import detect_format
 from .models import BrowserNode
 
 
+def _is_sonic_directory(path: Path) -> bool:
+    return path.is_dir() and (path / "joint_pos.csv").exists()
+
+
 def list_browser_nodes(path_str: str) -> tuple[str, list[BrowserNode]]:
     root = Path(path_str).expanduser().resolve()
     if not root.exists():
@@ -15,8 +19,10 @@ def list_browser_nodes(path_str: str) -> tuple[str, list[BrowserNode]]:
 
     nodes: list[BrowserNode] = []
     for child in sorted(root.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
-        motion_format = detect_format(child)
-        if child.is_file() and motion_format is not None:
+        if child.is_file():
+            motion_format = detect_format(child)
+            if motion_format is None:
+                continue
             nodes.append(
                 BrowserNode(
                     path=str(child),
@@ -28,19 +34,20 @@ def list_browser_nodes(path_str: str) -> tuple[str, list[BrowserNode]]:
             )
             continue
         if child.is_dir():
-            if motion_format == "sonic":
+            if _is_sonic_directory(child):
                 nodes.append(
                     BrowserNode(
                         path=str(child),
                         name=child.name,
                         node_type="motion",
-                        format=motion_format,
+                        format="sonic",
                         has_children=False,
                     )
                 )
                 continue
             has_children = any(
-                grandchild.is_dir() or detect_format(grandchild) is not None
+                grandchild.is_dir()
+                or (grandchild.is_file() and detect_format(grandchild) is not None)
                 for grandchild in child.iterdir()
             )
             nodes.append(
