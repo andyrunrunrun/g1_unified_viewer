@@ -102,6 +102,27 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(summary.last_observation_summary, {})
         self.assertEqual(summary.last_action_summary, {})
 
+    def test_toggle_physics_reset_flag_is_consumed_once(self) -> None:
+        self.controller.toggle_physics(True)
+
+        self.assertTrue(self.controller.consume_physics_reset_flag())
+        self.assertFalse(self.controller.consume_physics_reset_flag())
+
+    def test_physics_reset_paths_clear_reference_and_simulated_state(self) -> None:
+        self.controller.toggle_physics(True)
+        self.controller._reference_state = object()  # type: ignore[assignment]
+        self.controller._simulated_state = object()  # type: ignore[assignment]
+
+        self.controller.seek(1)
+        self.assertIsNone(self.controller._reference_state)
+        self.assertIsNone(self.controller._simulated_state)
+
+        self.controller._reference_state = object()  # type: ignore[assignment]
+        self.controller._simulated_state = object()  # type: ignore[assignment]
+        self.controller.toggle_physics(False)
+        self.assertIsNone(self.controller._reference_state)
+        self.assertIsNone(self.controller._simulated_state)
+
 
 class ControlPanelApiTest(unittest.TestCase):
     def setUp(self) -> None:

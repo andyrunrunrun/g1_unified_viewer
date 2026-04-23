@@ -148,6 +148,7 @@ class SessionController:
             self._require_active_sequence_locked()
             self._physics_enabled = bool(enabled)
             self._physics_needs_reset = True
+            self._reference_state = None
             self._simulated_state = None
             self._last_observation_summary = {}
             self._last_action_summary = {}
@@ -164,11 +165,18 @@ class SessionController:
             self._frame_accumulator = 0.0
             if self._physics_enabled:
                 self._physics_needs_reset = True
+                self._reference_state = None
                 self._simulated_state = None
                 self._last_observation_summary = {}
                 self._last_action_summary = {}
             self._push_log_locked(f"seek to frame {self._current_frame}")
             return self._build_summary_locked()
+
+    def consume_physics_reset_flag(self) -> bool:
+        with self._lock:
+            should_reset = self._physics_needs_reset
+            self._physics_needs_reset = False
+            return should_reset
 
     def set_loop(self, enabled: bool) -> SessionSummary:
         with self._lock:
