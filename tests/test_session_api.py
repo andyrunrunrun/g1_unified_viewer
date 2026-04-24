@@ -606,13 +606,43 @@ class RootPageSmokeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.text
 
-        for pane_id in ("logPane", "observationPane", "actionPane"):
-            self.assertIn(f'id="{pane_id}"', body)
-
         for control_id in ("resetTestButton", "dragPane", "impulseMagnitudeInput", "impulseDurationInput"):
             self.assertIn(f'id="{control_id}"', body)
 
-        for legacy_id in ("pathInput", "timeline", "policyList", "physicsToggleButton"):
+        for legacy_id in (
+            "pathInput",
+            "scanButton",
+            "playButton",
+            "pauseButton",
+            "stopButton",
+            "timeline",
+            "seekButton",
+            "trimStartInput",
+            "trimEndInput",
+            "markTrimStartButton",
+            "markTrimEndButton",
+            "exportButton",
+            "policyList",
+            "startPolicyButton",
+            "stopPolicyButton",
+            "stepPolicyButton",
+            "physicsToggleButton",
+            "viewerBadge",
+            "modeBadge",
+            "playbackBadge",
+            "policyBadge",
+            "physicsBadge",
+            "treeRoot",
+            "treeStatus",
+            "clipSummary",
+            "commandStatus",
+            "policyStatus",
+            "policyPane",
+            "cameraPane",
+            "logPane",
+            "observationPane",
+            "actionPane",
+        ):
             self.assertIn(f'id="{legacy_id}"', body)
 
         presets = re.findall(r'class="impulseButton[^"]*"\s+data-preset="([^"]+)"', body)
