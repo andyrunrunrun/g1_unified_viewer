@@ -512,7 +512,7 @@ class ViewerTestApiTest(unittest.TestCase):
         self.client.close()
         self.controller.shutdown()
 
-    def test_impulse_endpoint_requires_viewer_and_physics(self) -> None:
+    def test_impulse_endpoint_requires_connected_viewer(self) -> None:
         self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
 
         response = self.client.post(
@@ -521,7 +521,19 @@ class ViewerTestApiTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Viewer must be connected", response.text)
+        self.assertIn("Viewer is not connected", response.text)
+
+    def test_impulse_endpoint_requires_enabled_physics(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
+        self.controller.mark_viewer_connected(True)
+
+        response = self.client.post(
+            "/api/viewer/test/impulse",
+            json={"preset": "push_forward", "magnitude": 80.0, "duration": 0.15},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Physics must be enabled", response.text)
 
     def test_impulse_endpoint_updates_session_summary(self) -> None:
         self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})

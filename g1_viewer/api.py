@@ -320,10 +320,7 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
         try:
             return _handle_viewer_test_impulse_request(get_controller(), request)
         except Exception as exc:
-            detail = str(exc)
-            if detail == "Viewer is not connected":
-                detail = "Viewer must be connected"
-            raise HTTPException(status_code=400, detail=detail) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/viewer/test/reset", response_model=SessionSummary)
     def api_viewer_test_reset() -> SessionSummary:
