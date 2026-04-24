@@ -11,7 +11,12 @@ from fastapi.testclient import TestClient
 
 from g1_viewer.api import create_app
 from g1_viewer.importers import detect_format as importer_detect_format
-from g1_viewer.models import CanonicalRobotState, SimulationSnapshot
+from g1_viewer.models import (
+    CanonicalRobotState,
+    SimulationSnapshot,
+    ViewerImpulseRequest,
+    ViewerInteractionSummary,
+)
 from g1_viewer.session import SessionController
 
 
@@ -258,6 +263,60 @@ class SessionStateSourceTest(unittest.TestCase):
 
         self.assertEqual(summary.source_format, "twist2")
         self.assertIn("policy stopped", logs)
+
+
+class ViewerTestStateControllerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+
+    def tearDown(self) -> None:
+        self.controller.shutdown()
+
+    def test_session_summary_exposes_default_viewer_and_test_state(self) -> None:
+        summary = self.controller.get_session_summary()
+
+        self.assertFalse(summary.viewer_interaction.drag_active)
+        self.assertEqual(summary.viewer_interaction.perturb_mode, "none")
+        self.assertFalse(summary.test_state.pending_impulse)
+        self.assertEqual(summary.test_state.last_impulse_command, {})
+
+    def test_queue_viewer_impulse_updates_summary(self) -> None:
+        self.controller.mark_viewer_connected(True)
+        self.controller.toggle_physics(True)
+
+        summary = self.controller.queue_viewer_impulse(
+            ViewerImpulseRequest(preset="push_forward", magnitude=90.0, duration=0.25)
+        )
+
+        self.assertTrue(summary.test_state.pending_impulse)
+        self.assertEqual(summary.test_state.last_test_event, "impulse queued")
+        self.assertEqual(summary.test_state.last_impulse_command["preset"], "push_forward")
+
+    def test_loading_new_clip_clears_stale_viewer_and_test_state(self) -> None:
+        self.controller.mark_viewer_connected(True)
+        self.controller.toggle_physics(True)
+        self.controller.set_viewer_interaction(
+            ViewerInteractionSummary(
+                drag_active=True,
+                selected_body_id=1,
+                selected_body_name="pelvis",
+                perturb_mode="translate",
+                force_magnitude=32.0,
+                last_drag_timestamp=12.0,
+            )
+        )
+        self.controller.queue_viewer_impulse(
+            ViewerImpulseRequest(preset="push_left", magnitude=60.0, duration=0.15)
+        )
+
+        self.controller.load_clip(str(SONIC_SAMPLE), "sonic")
+        summary = self.controller.get_session_summary()
+
+        self.assertFalse(summary.viewer_interaction.drag_active)
+        self.assertEqual(summary.viewer_interaction.perturb_mode, "none")
+        self.assertFalse(summary.test_state.pending_impulse)
+        self.assertEqual(summary.test_state.last_impulse_command, {})
 
 
 class ControlPanelApiTest(unittest.TestCase):

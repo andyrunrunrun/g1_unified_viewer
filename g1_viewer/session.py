@@ -17,7 +17,11 @@ from .models import (
     SessionSummary,
     SimulationSnapshot,
     StateSequence,
+    TestStateSummary,
     ViewerCameraState,
+    ViewerImpulseCommand,
+    ViewerImpulseRequest,
+    ViewerInteractionSummary,
     model_to_dict,
     summarize_sequence,
 )
@@ -70,6 +74,9 @@ class SessionController:
 
         self._viewer_connected = False
         self._viewer_camera: ViewerCameraState | None = None
+        self._viewer_interaction = ViewerInteractionSummary()
+        self._test_state = TestStateSummary()
+        self._pending_impulse: ViewerImpulseCommand | None = None
         self._last_error: str | None = None
 
     def shutdown(self) -> None:
@@ -100,6 +107,7 @@ class SessionController:
             stopped_manual_policy = self._active_policy_id is not None and not self._policy_started_by_physics
             self._stop_policy_locked()
             self._clear_physics_state_locked(disable_physics=True, needs_reset=False)
+            self._reset_viewer_test_state_locked()
             self._sequences[sequence.sequence_id] = sequence
             self._active_sequence_id = sequence.sequence_id
             self._active_item_path = active_item_path
@@ -148,6 +156,7 @@ class SessionController:
             self._frame_accumulator = 0.0
             if self._physics_enabled:
                 self._clear_physics_state_locked(disable_physics=False, needs_reset=True)
+            self._reset_viewer_test_state_locked()
             return self._build_summary_locked()
 
     def toggle_physics(self, enabled: bool) -> SessionSummary:
@@ -166,6 +175,8 @@ class SessionController:
                 self._stop_policy_locked()
                 if stopped_manual_policy:
                     self._push_log_locked("policy stopped")
+            if not self._physics_enabled:
+                self._reset_viewer_test_state_locked()
             self._push_log_locked("physics enabled" if self._physics_enabled else "physics disabled")
             return self._build_summary_locked()
 
@@ -352,6 +363,7 @@ class SessionController:
                 disable_physics=True,
                 needs_reset=needs_reset,
             )
+            self._reset_viewer_test_state_locked()
             if had_active_policy:
                 self._push_log_locked("policy stopped")
             return self._build_summary_locked()
@@ -445,6 +457,50 @@ class SessionController:
     def mark_viewer_connected(self, connected: bool) -> None:
         with self._lock:
             self._viewer_connected = connected
+            if not connected:
+                self._reset_viewer_test_state_locked()
+
+    def set_viewer_interaction(self, interaction: ViewerInteractionSummary) -> None:
+        with self._lock:
+            self._viewer_interaction = ViewerInteractionSummary(**model_to_dict(interaction))
+
+    def queue_viewer_impulse(self, request: ViewerImpulseRequest) -> SessionSummary:
+        with self._lock:
+            self._require_active_sequence_locked()
+            if not self._viewer_connected:
+                raise ValueError("Viewer is not connected")
+            if not self._physics_enabled:
+                raise ValueError("Physics must be enabled")
+            command = ViewerImpulseCommand(**model_to_dict(request))
+            self._pending_impulse = command
+            self._test_state = TestStateSummary(
+                last_test_event="impulse queued",
+                last_test_status="pending",
+                last_impulse_command=model_to_dict(command),
+                pending_impulse=True,
+            )
+            self._push_log_locked(f"viewer impulse queued: {command.preset}")
+            return self._build_summary_locked()
+
+    def consume_viewer_impulse(self) -> ViewerImpulseCommand | None:
+        with self._lock:
+            command = self._pending_impulse
+            self._pending_impulse = None
+            if command is not None:
+                self._test_state.pending_impulse = False
+                self._test_state.last_test_status = "running"
+            return None if command is None else ViewerImpulseCommand(**model_to_dict(command))
+
+    def mark_viewer_test_result(self, *, event: str, status: str) -> None:
+        with self._lock:
+            self._test_state.last_test_event = event
+            self._test_state.last_test_status = status
+
+    def reset_viewer_test_state(self) -> SessionSummary:
+        with self._lock:
+            self._reset_viewer_test_state_locked()
+            self._push_log_locked("viewer test state reset")
+            return self._build_summary_locked()
 
     def update_simulated_state(self, state: CanonicalRobotState) -> None:
         with self._lock:
@@ -495,6 +551,8 @@ class SessionController:
             physics_enabled=self._physics_enabled,
             last_observation_summary=dict(self._last_observation_summary),
             last_action_summary=dict(self._last_action_summary),
+            viewer_interaction=ViewerInteractionSummary(**model_to_dict(self._viewer_interaction)),
+            test_state=TestStateSummary(**model_to_dict(self._test_state)),
             last_log_messages=list(self._log_messages),
             last_error=self._last_error,
         )
@@ -514,6 +572,11 @@ class SessionController:
         self._physics_needs_reset = needs_reset
         self._last_observation_summary = {}
         self._last_action_summary = {}
+
+    def _reset_viewer_test_state_locked(self) -> None:
+        self._viewer_interaction = ViewerInteractionSummary()
+        self._test_state = TestStateSummary()
+        self._pending_impulse = None
 
     def _require_active_sequence_locked(self) -> StateSequence:
         sequence = self._get_active_sequence_locked()

@@ -15,6 +15,13 @@ CommandMode = Literal[
     "joint_torque",
     "state_override",
 ]
+ViewerImpulsePreset = Literal[
+    "push_forward",
+    "push_backward",
+    "push_left",
+    "push_right",
+    "lift_up",
+]
 
 
 def model_to_dict(model: BaseModel) -> dict[str, Any]:
@@ -238,6 +245,36 @@ class MockStepRequest(BaseModel):
     snapshot: SimulationSnapshot | None = None
 
 
+class ViewerInteractionSummary(BaseModel):
+    drag_active: bool = False
+    selected_body_id: int | None = None
+    selected_body_name: str | None = None
+    perturb_mode: str = "none"
+    force_magnitude: float = 0.0
+    last_drag_timestamp: float | None = None
+
+
+class ViewerImpulseRequest(BaseModel):
+    preset: ViewerImpulsePreset
+    magnitude: float = Field(default=80.0, ge=1.0, le=500.0)
+    duration: float = Field(default=0.15, ge=0.01, le=5.0)
+    body_name: str | None = None
+
+
+class ViewerImpulseCommand(BaseModel):
+    preset: ViewerImpulsePreset
+    magnitude: float
+    duration: float
+    body_name: str | None = None
+
+
+class TestStateSummary(BaseModel):
+    last_test_event: str = ""
+    last_test_status: str = ""
+    last_impulse_command: dict[str, Any] = Field(default_factory=dict)
+    pending_impulse: bool = False
+
+
 class SessionSummary(BaseModel):
     catalog_root: str | None = None
     items: list[ScanItem] = Field(default_factory=list)
@@ -256,6 +293,8 @@ class SessionSummary(BaseModel):
     physics_enabled: bool = False
     last_observation_summary: dict[str, Any] = Field(default_factory=dict)
     last_action_summary: dict[str, Any] = Field(default_factory=dict)
+    viewer_interaction: ViewerInteractionSummary = Field(default_factory=ViewerInteractionSummary)
+    test_state: TestStateSummary = Field(default_factory=TestStateSummary)
     last_log_messages: list[str] = Field(default_factory=list)
     last_error: str | None = None
 
