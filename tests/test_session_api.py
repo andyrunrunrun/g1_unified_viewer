@@ -554,6 +554,16 @@ class ViewerTestApiTest(unittest.TestCase):
         self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
         self.controller.mark_viewer_connected(True)
         self.client.post("/api/session/physics", json={"enabled": True})
+        self.controller.set_viewer_interaction(
+            ViewerInteractionSummary(
+                drag_active=True,
+                selected_body_id=3,
+                selected_body_name="pelvis",
+                perturb_mode="translate",
+                force_magnitude=42.0,
+                last_drag_timestamp=9.0,
+            )
+        )
         self.client.post(
             "/api/viewer/test/impulse",
             json={"preset": "lift_up", "magnitude": 70.0, "duration": 0.1},
@@ -565,6 +575,9 @@ class ViewerTestApiTest(unittest.TestCase):
         payload = response.json()
         self.assertFalse(payload["test_state"]["pending_impulse"])
         self.assertFalse(payload["viewer_interaction"]["drag_active"])
+        self.assertEqual(payload["test_state"]["last_impulse_command"], {})
+        self.assertEqual(payload["test_state"]["last_test_event"], "")
+        self.assertEqual(payload["test_state"]["last_test_status"], "")
 
 
 class RootPageSmokeTest(unittest.TestCase):
