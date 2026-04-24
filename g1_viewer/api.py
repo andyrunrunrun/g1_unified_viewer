@@ -36,6 +36,7 @@ from .models import (
     TrimExportRequest,
     TrimExportResponse,
     TrimFrameRequest,
+    ViewerImpulseRequest,
     summarize_sequence,
 )
 from .policies import PolicyError
@@ -119,6 +120,12 @@ def _handle_policy_active_request(
 def _handle_policy_step_request(controller: SessionController, request: PolicyStepRequest) -> PolicyOperationResponse:
     result = controller.step_policy(request.policy_id, request.snapshot, now=time.monotonic())
     return PolicyOperationResponse(ok=True, message="policy step ok", result=result)
+
+
+def _handle_viewer_test_impulse_request(
+    controller: SessionController, request: ViewerImpulseRequest
+) -> SessionSummary:
+    return controller.queue_viewer_impulse(request)
 
 
 def create_app(controller: SessionController | None = None) -> FastAPI:
@@ -305,6 +312,23 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
     def api_session_physics(request: SessionPhysicsRequest) -> SessionSummary:
         try:
             return get_controller().toggle_physics(request.enabled)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/viewer/test/impulse", response_model=SessionSummary)
+    def api_viewer_test_impulse(request: ViewerImpulseRequest) -> SessionSummary:
+        try:
+            return _handle_viewer_test_impulse_request(get_controller(), request)
+        except Exception as exc:
+            detail = str(exc)
+            if detail == "Viewer is not connected":
+                detail = "Viewer must be connected"
+            raise HTTPException(status_code=400, detail=detail) from exc
+
+    @app.post("/api/viewer/test/reset", response_model=SessionSummary)
+    def api_viewer_test_reset() -> SessionSummary:
+        try:
+            return get_controller().reset_viewer_test_state()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

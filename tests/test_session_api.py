@@ -503,6 +503,58 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(legacy_step.status_code, 422)
 
 
+class ViewerTestApiTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.client = TestClient(create_app(self.controller))
+
+    def tearDown(self) -> None:
+        self.client.close()
+        self.controller.shutdown()
+
+    def test_impulse_endpoint_requires_viewer_and_physics(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
+
+        response = self.client.post(
+            "/api/viewer/test/impulse",
+            json={"preset": "push_forward", "magnitude": 80.0, "duration": 0.15},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Viewer must be connected", response.text)
+
+    def test_impulse_endpoint_updates_session_summary(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
+        self.controller.mark_viewer_connected(True)
+        self.client.post("/api/session/physics", json={"enabled": True})
+
+        response = self.client.post(
+            "/api/viewer/test/impulse",
+            json={"preset": "push_right", "magnitude": 120.0, "duration": 0.2},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["test_state"]["pending_impulse"])
+        self.assertEqual(payload["test_state"]["last_impulse_command"]["preset"], "push_right")
+
+    def test_reset_endpoint_clears_test_state(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
+        self.controller.mark_viewer_connected(True)
+        self.client.post("/api/session/physics", json={"enabled": True})
+        self.client.post(
+            "/api/viewer/test/impulse",
+            json={"preset": "lift_up", "magnitude": 70.0, "duration": 0.1},
+        )
+
+        response = self.client.post("/api/viewer/test/reset")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["test_state"]["pending_impulse"])
+        self.assertFalse(payload["viewer_interaction"]["drag_active"])
+
+
 class RootPageSmokeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SessionController()
