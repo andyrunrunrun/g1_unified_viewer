@@ -12,7 +12,42 @@ from .config import resolve_g1_model_path
 from .models import CanonicalRobotState
 from .physics import compute_pd_torque_targets, reset_data_to_state, state_from_data
 from .session import SessionController
-from .viewer_testing import apply_impulse_wrench, build_active_impulse, summarize_perturbation
+from .viewer_testing import (
+    ActiveImpulse,
+    apply_impulse_wrench,
+    build_active_impulse,
+    summarize_perturbation,
+)
+
+
+def _update_active_impulse(
+    controller: SessionController,
+    data,
+    active_impulse: ActiveImpulse | None,
+    *,
+    tick_now: float,
+) -> ActiveImpulse | None:
+    xfrc_applied = getattr(data, "xfrc_applied", None)
+    if xfrc_applied is not None:
+        xfrc_applied[:] = 0.0
+
+    if active_impulse is None:
+        return None
+
+    if tick_now <= active_impulse.expires_at:
+        if xfrc_applied is not None:
+            apply_impulse_wrench(
+                data,
+                active_impulse.body_id,
+                active_impulse.force,
+            )
+        return active_impulse
+
+    controller.mark_viewer_test_result(
+        event="impulse completed",
+        status="idle",
+    )
+    return None
 
 
 class NativeViewerRuntime:
@@ -62,21 +97,12 @@ class NativeViewerRuntime:
                                 status="running",
                             )
 
-                        if hasattr(self.data, "xfrc_applied"):
-                            self.data.xfrc_applied[:] = 0.0
-                            if self._active_impulse is not None:
-                                if tick_now <= self._active_impulse.expires_at:
-                                    apply_impulse_wrench(
-                                        self.data,
-                                        self._active_impulse.body_id,
-                                        self._active_impulse.force,
-                                    )
-                                else:
-                                    self._active_impulse = None
-                                    self.controller.mark_viewer_test_result(
-                                        event="impulse completed",
-                                        status="idle",
-                                    )
+                        self._active_impulse = _update_active_impulse(
+                            self.controller,
+                            self.data,
+                            self._active_impulse,
+                            tick_now=tick_now,
+                        )
 
                         if summary.physics_enabled:
                             reference_state = self.controller.prepare_physics_reset(now=tick_now)
