@@ -268,7 +268,6 @@ class SessionStateSourceTest(unittest.TestCase):
 class ViewerTestStateControllerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SessionController()
-        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
 
     def tearDown(self) -> None:
         self.controller.shutdown()
@@ -276,12 +275,15 @@ class ViewerTestStateControllerTest(unittest.TestCase):
     def test_session_summary_exposes_default_viewer_and_test_state(self) -> None:
         summary = self.controller.get_session_summary()
 
+        self.assertEqual(summary.playback_state, "empty")
+        self.assertIsNone(summary.active_sequence)
         self.assertFalse(summary.viewer_interaction.drag_active)
         self.assertEqual(summary.viewer_interaction.perturb_mode, "none")
         self.assertFalse(summary.test_state.pending_impulse)
         self.assertEqual(summary.test_state.last_impulse_command, {})
 
     def test_queue_viewer_impulse_updates_summary(self) -> None:
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
         self.controller.mark_viewer_connected(True)
         self.controller.toggle_physics(True)
 
@@ -294,6 +296,7 @@ class ViewerTestStateControllerTest(unittest.TestCase):
         self.assertEqual(summary.test_state.last_impulse_command["preset"], "push_forward")
 
     def test_loading_new_clip_clears_stale_viewer_and_test_state(self) -> None:
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
         self.controller.mark_viewer_connected(True)
         self.controller.toggle_physics(True)
         self.controller.set_viewer_interaction(
