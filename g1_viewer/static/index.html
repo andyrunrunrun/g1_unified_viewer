@@ -3,140 +3,234 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>G1 Unified Viewer 控制面板</title>
+    <title>G1 Unified Viewer Control Console</title>
     <style>
       :root {
-        --bg: #efe7db;
-        --panel: rgba(255, 251, 245, 0.84);
-        --line: rgba(41, 44, 56, 0.12);
-        --ink: #1f2431;
-        --soft: #5f677a;
-        --accent: #c65b2f;
-        --accent-strong: #8e3e1e;
-        --ok: #227a4d;
-        --warn: #995d12;
-        --danger: #ad3122;
+        --bg-0: #050b17;
+        --bg-1: #0b1424;
+        --bg-2: #13223a;
+        --panel: rgba(10, 18, 33, 0.78);
+        --panel-strong: rgba(11, 22, 40, 0.92);
+        --panel-soft: rgba(164, 215, 255, 0.06);
+        --line: rgba(132, 198, 255, 0.18);
+        --line-strong: rgba(132, 198, 255, 0.34);
+        --ink: #f2f8ff;
+        --muted: #8fa8c4;
+        --accent: #1fd0ff;
+        --accent-strong: #0b8cff;
+        --accent-warm: #ffc469;
+        --ok: #75f0a4;
+        --warn: #ffd073;
+        --danger: #ff7f9f;
+        --shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
       }
 
       * {
         box-sizing: border-box;
       }
 
+      html {
+        color-scheme: dark;
+      }
+
       body {
         margin: 0;
+        min-height: 100vh;
         color: var(--ink);
-        font-family: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+        font-family: "Space Grotesk", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
         background:
-          radial-gradient(circle at top left, rgba(198, 91, 47, 0.14), transparent 28%),
-          radial-gradient(circle at bottom right, rgba(76, 102, 145, 0.12), transparent 32%),
-          linear-gradient(145deg, #f5eee4 0%, #efe5d8 42%, #ebe4dc 100%);
+          radial-gradient(circle at top left, rgba(31, 208, 255, 0.18), transparent 26%),
+          radial-gradient(circle at 85% 18%, rgba(11, 140, 255, 0.2), transparent 28%),
+          radial-gradient(circle at bottom right, rgba(255, 196, 105, 0.12), transparent 24%),
+          linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 42%, var(--bg-2) 100%);
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        background-size: 32px 32px;
+        mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.65), transparent 92%);
+      }
+
+      button,
+      input {
+        font: inherit;
       }
 
       .shell {
         min-height: 100vh;
-        display: grid;
-        gap: 18px;
-        padding: 18px;
+        padding: 22px;
       }
 
-      .hero,
+      .console-frame {
+        max-width: 1640px;
+        margin: 0 auto;
+        display: grid;
+        gap: 18px;
+      }
+
       .panel {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--line);
         border-radius: 26px;
-        border: 1px solid var(--line);
-        background: var(--panel);
-        backdrop-filter: blur(16px);
-        box-shadow: 0 20px 50px rgba(31, 36, 49, 0.08);
+        background: linear-gradient(180deg, rgba(18, 31, 54, 0.92) 0%, rgba(8, 16, 30, 0.88) 100%);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
       }
 
-      .hero {
+      .panel::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        border-radius: inherit;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 38%);
+      }
+
+      .topbar {
         display: grid;
-        gap: 14px;
-        padding: 20px 22px;
-      }
-
-      .hero h1 {
-        margin: 0;
-        font-size: 30px;
-        line-height: 1.08;
-      }
-
-      .hero p {
-        margin: 0;
-        max-width: 920px;
-        color: var(--soft);
-      }
-
-      .toolbar {
-        display: grid;
-        grid-template-columns: minmax(240px, 1fr) repeat(8, auto);
-        gap: 10px;
-        align-items: center;
-      }
-
-      .hero-bar {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-
-      .badge {
-        padding: 8px 12px;
-        border-radius: 999px;
-        border: 1px solid var(--line);
-        font-size: 13px;
-        background: rgba(255, 255, 255, 0.62);
-      }
-
-      .badge.ok {
-        color: var(--ok);
-      }
-
-      .badge.warn {
-        color: var(--warn);
-      }
-
-      .main-grid {
-        display: grid;
-        grid-template-columns: 340px minmax(0, 1fr) 340px;
+        grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
         gap: 18px;
+        padding: 24px 26px;
       }
 
-      .bottom-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 18px;
+      .eyebrow {
+        margin: 0 0 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.24em;
+        font-size: 11px;
+        color: var(--accent);
       }
 
-      .panel {
-        padding: 18px;
-      }
-
+      .topbar h1,
       .panel h2,
       .panel h3 {
-        margin: 0 0 14px;
+        margin: 0;
+      }
+
+      .topbar h1 {
+        font-size: clamp(32px, 4vw, 54px);
+        line-height: 0.94;
+      }
+
+      .topbar p,
+      .hint,
+      .status,
+      .ambient-card span,
+      .module-header p {
+        color: var(--muted);
+      }
+
+      .topbar p {
+        margin: 10px 0 0;
+        max-width: 760px;
+        line-height: 1.55;
+      }
+
+      .topbar-ambient {
+        display: grid;
+        gap: 12px;
+        align-content: center;
+      }
+
+      .ambient-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px 18px;
+        background: var(--panel-soft);
+      }
+
+      .ambient-card strong {
+        display: block;
         font-size: 18px;
+      }
+
+      .console-grid {
+        display: grid;
+        grid-template-columns: 340px minmax(0, 1fr) 360px;
+        gap: 18px;
       }
 
       .stack {
         display: grid;
-        gap: 12px;
+        gap: 18px;
       }
 
-      .grid-2 {
+      .module {
+        padding: 18px;
+      }
+
+      .module-header {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
+        margin-bottom: 14px;
       }
 
+      .module-header h2 {
+        font-size: 22px;
+      }
+
+      .module-header p,
+      .hint,
+      .status {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .status.error {
+        color: var(--danger);
+      }
+
+      .controls-row,
+      .grid-2,
+      .grid-3,
+      .badge-grid,
+      .diagnostics-grid,
+      .runtime-grid,
+      .impulse-grid,
       .stat-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
       }
 
-      input,
-      button {
-        font: inherit;
+      .controls-row {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .badge-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .runtime-grid {
+        grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+        align-items: start;
+      }
+
+      .diagnostics-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .impulse-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .stat-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
       input[type="text"],
@@ -144,10 +238,10 @@
       input[type="range"] {
         width: 100%;
         border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 10px 12px;
-        background: rgba(255, 255, 255, 0.72);
+        border-radius: 16px;
+        padding: 11px 13px;
         color: var(--ink);
+        background: rgba(5, 12, 24, 0.72);
       }
 
       input[type="range"] {
@@ -156,62 +250,130 @@
       }
 
       button {
-        border: 0;
-        border-radius: 14px;
+        min-height: 44px;
+        border: 1px solid transparent;
+        border-radius: 16px;
         padding: 10px 14px;
         cursor: pointer;
-        white-space: nowrap;
-        color: white;
-        background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-        box-shadow: 0 10px 24px rgba(142, 62, 30, 0.22);
+        color: #04111f;
+        background: linear-gradient(135deg, var(--accent) 0%, #8bedff 100%);
+        box-shadow: 0 14px 30px rgba(31, 208, 255, 0.2);
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button.secondary,
+      button.ghost {
+        color: var(--ink);
+        border-color: var(--line);
+        box-shadow: none;
       }
 
       button.secondary {
-        color: var(--ink);
-        background: rgba(31, 36, 49, 0.08);
-        box-shadow: none;
+        background: rgba(132, 198, 255, 0.14);
       }
 
       button.ghost {
-        color: var(--soft);
-        background: rgba(255, 255, 255, 0.52);
-        box-shadow: none;
+        background: rgba(255, 255, 255, 0.05);
       }
 
       button:disabled,
       input:disabled {
         cursor: not-allowed;
-        opacity: 0.56;
+        opacity: 0.55;
+        transform: none;
       }
 
-      .hint,
-      .status {
-        color: var(--soft);
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 10px 12px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--ink);
         font-size: 13px;
-        line-height: 1.5;
+        text-align: center;
       }
 
-      .status.error {
-        color: var(--danger);
+      .badge.ok {
+        color: var(--ok);
+        border-color: rgba(117, 240, 164, 0.35);
+      }
+
+      .badge.warn {
+        color: var(--warn);
+        border-color: rgba(255, 208, 115, 0.35);
+      }
+
+      .section-shell,
+      .runtime-hero,
+      .runtime-card,
+      .diag-card,
+      .stat,
+      .tree-node,
+      .card,
+      .note {
+        position: relative;
+        border-radius: 20px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .section-shell,
+      .runtime-card,
+      .diag-card,
+      .stat,
+      .note,
+      .card {
+        padding: 14px;
+      }
+
+      .runtime-hero {
+        padding: 18px;
+        min-height: 220px;
+        background:
+          radial-gradient(circle at top right, rgba(31, 208, 255, 0.18), transparent 30%),
+          linear-gradient(160deg, rgba(17, 36, 67, 0.96) 0%, rgba(7, 15, 29, 0.92) 100%);
+      }
+
+      .runtime-hero h3 {
+        font-size: 24px;
+      }
+
+      .runtime-hero p {
+        margin: 10px 0 0;
+        max-width: 440px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .runtime-card h3,
+      .diag-card h3,
+      .test-panel h3,
+      .status-panel h3 {
+        margin-bottom: 10px;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--accent-warm);
       }
 
       .tree,
       .policy-list {
         display: grid;
         gap: 8px;
-        max-height: 52vh;
+        max-height: 34vh;
         overflow: auto;
       }
 
-      .tree-node,
-      .card {
-        border-radius: 18px;
-        border: 1px solid var(--line);
-        padding: 12px;
-        background: rgba(255, 255, 255, 0.66);
-      }
-
       .tree-node {
+        padding: 12px;
         padding-left: calc(12px + var(--depth, 0) * 16px);
         font-size: 14px;
         word-break: break-all;
@@ -224,13 +386,13 @@
       }
 
       .tree-node.directory {
-        color: var(--accent-strong);
+        color: var(--accent);
       }
 
       .tree-node.active,
       .card.active {
-        border-color: rgba(198, 91, 47, 0.45);
-        box-shadow: inset 0 0 0 1px rgba(198, 91, 47, 0.22);
+        border-color: var(--line-strong);
+        box-shadow: inset 0 0 0 1px rgba(31, 208, 255, 0.22);
       }
 
       .tree-children {
@@ -242,155 +404,303 @@
         display: none;
       }
 
-      .stat,
-      .note {
-        border-radius: 18px;
-        border: 1px solid var(--line);
-        padding: 12px;
-        background: rgba(255, 255, 255, 0.52);
-      }
-
       .stat .label,
       .card .meta {
-        color: var(--soft);
+        color: var(--muted);
         font-size: 12px;
       }
 
       .stat .value,
       .card .title {
-        margin-top: 6px;
+        margin-top: 8px;
+        font-size: 18px;
         font-weight: 700;
       }
 
       .card .meta {
-        margin-top: 5px;
-        word-break: break-all;
+        margin-top: 6px;
+        word-break: break-word;
       }
 
       pre {
         margin: 0;
-        min-height: 108px;
+        min-height: 120px;
         max-height: 260px;
         overflow: auto;
         padding: 14px;
         border-radius: 18px;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.56);
+        border: 1px solid rgba(132, 198, 255, 0.14);
+        background: rgba(5, 12, 24, 0.6);
+        color: #d9e9ff;
         white-space: pre-wrap;
         word-break: break-word;
         font-size: 12px;
-        line-height: 1.55;
+        line-height: 1.6;
         font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
       }
 
-      @media (max-width: 1280px) {
-        .toolbar,
-        .main-grid,
-        .bottom-grid,
+      .diagnostics-panel {
+        border-color: rgba(132, 198, 255, 0.12);
+        background: linear-gradient(180deg, rgba(10, 17, 30, 0.84) 0%, rgba(7, 13, 24, 0.82) 100%);
+      }
+
+      .diagnostics-panel .module-header h2 {
+        color: #d7e6ff;
+      }
+
+      .status-panel .badge-grid {
+        margin-bottom: 12px;
+      }
+
+      .status-panel .section-shell,
+      .test-panel .section-shell {
+        display: grid;
+        gap: 10px;
+      }
+
+      .pulse-strip {
+        height: 12px;
+        border-radius: 999px;
+        background:
+          linear-gradient(90deg, rgba(31, 208, 255, 0.16) 0%, rgba(31, 208, 255, 0.62) 48%, rgba(255, 196, 105, 0.2) 100%);
+      }
+
+      .section-stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      @media (max-width: 1440px) {
+        .console-grid {
+          grid-template-columns: 320px minmax(0, 1fr) 320px;
+        }
+
+        .diagnostics-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 1180px) {
+        .topbar,
+        .console-grid,
+        .runtime-grid,
+        .diagnostics-grid,
+        .controls-row,
         .grid-2,
+        .grid-3,
+        .badge-grid,
+        .impulse-grid,
         .stat-grid {
           grid-template-columns: 1fr;
+        }
+
+        .tree,
+        .policy-list,
+        pre {
+          max-height: none;
         }
       }
     </style>
   </head>
   <body>
     <div class="shell">
-      <header class="hero">
-        <div>
-          <h1>G1 Unified Viewer 控制面板</h1>
-          <p>主可视化窗口保留在 MuJoCo 原生 viewer 中。这个网页只作为 SessionController 的薄诊断客户端。</p>
-        </div>
-
-        <div class="toolbar">
-          <input id="pathInput" type="text" placeholder="输入数据根目录" />
-          <button id="scanButton">扫描</button>
-          <button id="playButton">播放</button>
-          <button class="secondary" id="pauseButton">暂停</button>
-          <button class="secondary" id="stopButton">停止</button>
-          <button class="secondary" id="physicsToggleButton">Physics OFF</button>
-          <button id="startPolicyButton">启动策略</button>
-          <button class="secondary" id="stopPolicyButton">停止策略</button>
-          <button class="secondary" id="exportButton">导出裁剪</button>
-        </div>
-
-        <div class="hero-bar">
-          <span class="badge" id="viewerBadge">Viewer 未连接</span>
-          <span class="badge" id="modeBadge">模式: dataset</span>
-          <span class="badge" id="playbackBadge">播放: empty</span>
-          <span class="badge" id="policyBadge">策略: -</span>
-          <span class="badge" id="physicsBadge">Physics OFF</span>
-        </div>
-      </header>
-
-      <div class="main-grid">
-        <aside class="panel tree-panel stack">
+      <div class="console-frame">
+        <header class="panel topbar">
           <div>
-            <h2>动作文件树</h2>
-            <div class="hint">目录按需展开，动作节点点击后通过 grouped session API 加载。</div>
+            <p class="eyebrow">SONIC Operations Console</p>
+            <h1>G1 Unified Viewer</h1>
+            <p>
+              Native MuJoCo viewer remains the real drag and perturbation surface. This web console stays focused on
+              session control, playback, policy orchestration, and test-state visibility.
+            </p>
           </div>
-          <div class="status" id="treeStatus">输入数据根目录后扫描。</div>
-          <div class="tree" id="treeRoot"></div>
-        </aside>
 
-        <main class="panel center-panel stack">
-          <section class="stack">
-            <div>
-              <h2>当前动作</h2>
-              <div class="hint">时间线和裁剪控件只提交命令，状态由会话摘要回填。</div>
+          <div class="topbar-ambient">
+            <div class="ambient-card">
+              <span>Control Surface</span>
+              <strong>3-column integrated console</strong>
             </div>
-            <div class="stat-grid" id="clipSummary"></div>
-            <input id="timeline" type="range" min="0" max="0" value="0" disabled />
-            <div class="grid-2">
-              <input id="frameInput" type="number" min="0" value="0" disabled />
-              <button class="secondary" id="seekButton">跳转到帧</button>
+            <div class="ambient-card">
+              <span>Runtime Link</span>
+              <strong>SessionController + grouped APIs</strong>
             </div>
-            <div class="grid-2">
-              <input id="trimStartInput" type="number" min="0" value="0" disabled />
-              <input id="trimEndInput" type="number" min="0" value="0" disabled />
-            </div>
-            <div class="grid-2">
-              <button class="ghost" id="markTrimStartButton">当前帧设为起点</button>
-              <button class="ghost" id="markTrimEndButton">当前帧设为终点</button>
-            </div>
-            <div class="note" id="trimSummary">裁剪区间: 0 至 0</div>
-            <div class="status" id="commandStatus">等待操作。</div>
-          </section>
-        </main>
-
-        <aside class="panel inspector-panel stack">
-          <div>
-            <h2>策略与检查器</h2>
-            <div class="hint">策略启动、停止和单步测试使用 grouped policy endpoints。</div>
+            <div class="pulse-strip"></div>
           </div>
-          <button class="secondary" id="stepPolicyButton">单步测试</button>
-          <div class="status" id="policyStatus">策略清单加载中。</div>
-          <div class="policy-list" id="policyList"></div>
-          <section class="stack">
-            <h3>Policy</h3>
-            <pre id="policyPane">等待会话状态...</pre>
-          </section>
-          <section class="stack">
-            <h3>Camera</h3>
-            <pre id="cameraPane">等待 MuJoCo viewer 连接...</pre>
-          </section>
-        </aside>
+        </header>
+
+        <div class="console-grid">
+          <aside class="stack">
+            <section class="panel module">
+              <div class="module-header">
+                <h2>Data</h2>
+                <p>Scan the catalog root and browse the motion tree without leaving the console.</p>
+              </div>
+              <div class="section-stack">
+                <input id="pathInput" type="text" placeholder="输入数据根目录" />
+                <button id="scanButton">Scan</button>
+                <div class="status" id="treeStatus">输入数据根目录后扫描。</div>
+                <div class="tree" id="treeRoot"></div>
+              </div>
+            </section>
+
+            <section class="panel module">
+              <div class="module-header">
+                <h2>Motion</h2>
+                <p>Load clips, inspect the current frame, and drive playback through the session API.</p>
+              </div>
+              <div class="section-stack">
+                <div class="stat-grid" id="clipSummary"></div>
+                <input id="timeline" type="range" min="0" max="0" value="0" disabled />
+                <div class="grid-2">
+                  <input id="frameInput" type="number" min="0" value="0" disabled />
+                  <button class="secondary" id="seekButton">Seek</button>
+                </div>
+                <div class="controls-row">
+                  <button id="playButton">Play</button>
+                  <button class="secondary" id="pauseButton">Pause</button>
+                  <button class="secondary" id="stopButton">Stop</button>
+                </div>
+                <div class="status" id="commandStatus">等待操作。</div>
+              </div>
+            </section>
+
+            <section class="panel module">
+              <div class="module-header">
+                <h2>Trim & Export</h2>
+                <p>Mark frame ranges, tune exact trim bounds, and export the active slice.</p>
+              </div>
+              <div class="section-stack">
+                <div class="grid-2">
+                  <input id="trimStartInput" type="number" min="0" value="0" disabled />
+                  <input id="trimEndInput" type="number" min="0" value="0" disabled />
+                </div>
+                <div class="grid-2">
+                  <button class="ghost" id="markTrimStartButton">Mark Start</button>
+                  <button class="ghost" id="markTrimEndButton">Mark End</button>
+                </div>
+                <div class="note" id="trimSummary">裁剪区间: 0 至 0</div>
+                <button class="secondary" id="exportButton">Export Trim</button>
+              </div>
+            </section>
+
+            <section class="panel module">
+              <div class="module-header">
+                <h2>Policy</h2>
+                <p>Manage the loaded policy set and trigger manual runtime steps when needed.</p>
+              </div>
+              <div class="section-stack">
+                <div class="grid-3">
+                  <button id="startPolicyButton">Start</button>
+                  <button class="secondary" id="stopPolicyButton">Stop</button>
+                  <button class="secondary" id="stepPolicyButton">Step</button>
+                </div>
+                <div class="status" id="policyStatus">策略清单加载中。</div>
+                <div class="policy-list" id="policyList"></div>
+              </div>
+            </section>
+          </aside>
+
+          <main class="stack">
+            <section class="panel module">
+              <div class="module-header">
+                <p class="eyebrow">Center Workspace</p>
+                <h2>Viewer Runtime</h2>
+                <p>Runtime state mirrors the native viewer while keeping the console focused on orchestration.</p>
+              </div>
+              <div class="runtime-grid">
+                <div class="runtime-hero">
+                  <h3>Integrated runtime bridge</h3>
+                  <p>
+                    The control panel keeps clip state, camera state, policy state, and test state visible while the
+                    native MuJoCo window remains the true interaction surface for drag and perturbation.
+                  </p>
+                </div>
+                <div class="section-stack">
+                  <article class="runtime-card">
+                    <h3>Policy Feed</h3>
+                    <pre id="policyPane">等待会话状态...</pre>
+                  </article>
+                  <article class="runtime-card">
+                    <h3>Camera Feed</h3>
+                    <pre id="cameraPane">等待 MuJoCo viewer 连接...</pre>
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel module diagnostics-panel">
+              <div class="module-header">
+                <p class="eyebrow">Secondary Readouts</p>
+                <h2>Diagnostics</h2>
+                <p>Diagnostics remain available, but visually demoted beneath the primary runtime workspace.</p>
+              </div>
+              <div class="diagnostics-grid">
+                <article class="diag-card">
+                  <h3>Log</h3>
+                  <pre id="logPane">暂无日志。</pre>
+                </article>
+                <article class="diag-card">
+                  <h3>Observation</h3>
+                  <pre id="observationPane">{}</pre>
+                </article>
+                <article class="diag-card">
+                  <h3>Action</h3>
+                  <pre id="actionPane">{}</pre>
+                </article>
+              </div>
+            </section>
+          </main>
+
+          <aside class="stack">
+            <section class="panel module status-panel">
+              <div class="module-header">
+                <h2>Status</h2>
+                <p>Quick runtime badges and physics control stay visible beside the test tools.</p>
+              </div>
+              <div class="badge-grid">
+                <span class="badge" id="viewerBadge">Viewer 未连接</span>
+                <span class="badge" id="modeBadge">模式: dataset</span>
+                <span class="badge" id="playbackBadge">播放: empty</span>
+                <span class="badge" id="policyBadge">策略: -</span>
+                <span class="badge" id="physicsBadge">Physics OFF</span>
+                <button class="secondary" id="physicsToggleButton">Physics OFF</button>
+              </div>
+              <div class="section-shell">
+                <h3>Console Notes</h3>
+                <div class="hint">
+                  Physics, policy, and viewer test commands all go through the existing grouped endpoints. Errors are
+                  surfaced through the command or policy status channels.
+                </div>
+              </div>
+            </section>
+
+            <section class="panel module test-panel">
+              <div class="module-header">
+                <h2>Test</h2>
+                <p>Queue preset impulses, inspect drag state, and reset viewer test state from the control panel.</p>
+              </div>
+              <div class="section-stack">
+                <div class="grid-2">
+                  <input id="impulseMagnitudeInput" type="number" min="1" max="500" step="1" value="80" />
+                  <input id="impulseDurationInput" type="number" min="0.01" max="5" step="0.01" value="0.15" />
+                </div>
+                <div class="impulse-grid">
+                  <button class="impulseButton" data-preset="push_forward">Push Forward</button>
+                  <button class="impulseButton secondary" data-preset="push_backward">Push Backward</button>
+                  <button class="impulseButton secondary" data-preset="push_left">Push Left</button>
+                  <button class="impulseButton secondary" data-preset="push_right">Push Right</button>
+                  <button class="impulseButton ghost" data-preset="lift_up">Lift Up</button>
+                </div>
+                <button class="secondary" id="resetTestButton">Reset Test State</button>
+                <div class="section-shell">
+                  <h3>Drag / Test State</h3>
+                  <pre id="dragPane">等待 viewer_interaction / test_state ...</pre>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </div>
       </div>
-
-      <section class="bottom-grid">
-        <div class="panel stack">
-          <h3>日志</h3>
-          <pre id="logPane">暂无日志。</pre>
-        </div>
-        <div class="panel stack">
-          <h3>Observation</h3>
-          <pre id="observationPane">{}</pre>
-        </div>
-        <div class="panel stack">
-          <h3>Action</h3>
-          <pre id="actionPane">{}</pre>
-        </div>
-      </section>
     </div>
 
     <script>
@@ -411,6 +721,7 @@
       const stopPolicyButton = document.getElementById("stopPolicyButton");
       const exportButton = document.getElementById("exportButton");
       const stepPolicyButton = document.getElementById("stepPolicyButton");
+      const resetTestButton = document.getElementById("resetTestButton");
 
       const viewerBadge = document.getElementById("viewerBadge");
       const modeBadge = document.getElementById("modeBadge");
@@ -438,6 +749,10 @@
       const logPane = document.getElementById("logPane");
       const observationPane = document.getElementById("observationPane");
       const actionPane = document.getElementById("actionPane");
+      const impulseMagnitudeInput = document.getElementById("impulseMagnitudeInput");
+      const impulseDurationInput = document.getElementById("impulseDurationInput");
+      const dragPane = document.getElementById("dragPane");
+      const impulseButtons = document.querySelectorAll(".impulseButton");
 
       async function postJson(url, payload) {
         const options = { method: "POST" };
@@ -592,6 +907,7 @@
 
         renderClipSummary(session, sequence, maxFrame);
         renderDiagnostics(session);
+        renderPolicies();
 
         document.querySelectorAll(".tree-node.motion").forEach((row) => {
           row.classList.toggle("active", row.dataset.path === activePath);
@@ -660,6 +976,10 @@
         cameraPane.textContent = session.viewer_camera
           ? formatJson({ connected: session.viewer_connected, camera: session.viewer_camera })
           : "等待 MuJoCo viewer 连接...";
+        dragPane.textContent = formatJson({
+          viewer_interaction: session.viewer_interaction,
+          test_state: session.test_state,
+        });
       }
 
       function renderPolicies() {
@@ -716,6 +1036,14 @@
         await postJson("/api/policies/step", { policy_id: policyId });
       }
 
+      async function queueImpulse(preset) {
+        await postJson("/api/viewer/test/impulse", {
+          preset,
+          magnitude: Number(impulseMagnitudeInput.value),
+          duration: Number(impulseDurationInput.value),
+        });
+      }
+
       async function exportTrim() {
         const sequence = activeSequence();
         if (!sequence) {
@@ -739,9 +1067,7 @@
       stopButton.addEventListener("click", () =>
         runCommand(() => postJson("/api/session/playback", { action: "stop" }), "已停止。"),
       );
-      physicsToggleButton.addEventListener("click", () =>
-        runCommand(togglePhysics, "Physics 状态已更新。"),
-      );
+      physicsToggleButton.addEventListener("click", () => runCommand(togglePhysics, "Physics 状态已更新。"));
       startPolicyButton.addEventListener("click", () =>
         runCommand(
           activateSelectedPolicy,
@@ -795,6 +1121,17 @@
         runCommand(() => postJson("/api/session/trim", { action: "mark_end" }), "已标记裁剪终点。"),
       );
       exportButton.addEventListener("click", () => runCommand(exportTrim, "裁剪导出完成。"));
+      resetTestButton.addEventListener("click", () =>
+        runCommand(() => postJson("/api/viewer/test/reset"), "测试状态已重置。"),
+      );
+      impulseButtons.forEach((button) => {
+        button.addEventListener("click", () =>
+          runCommand(
+            () => queueImpulse(button.dataset.preset),
+            `已排队测试冲击: ${button.dataset.preset}`,
+          ),
+        );
+      });
 
       async function bootstrap() {
         await refreshSession();

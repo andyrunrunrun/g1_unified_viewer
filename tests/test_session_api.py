@@ -589,15 +589,16 @@ class RootPageSmokeTest(unittest.TestCase):
         self.client.close()
         self.controller.shutdown()
 
-    def test_root_page_contains_tree_physics_and_diagnostics_sections(self) -> None:
+    def test_root_page_contains_rebuilt_console_sections(self) -> None:
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         body = response.text
-        self.assertIn("动作文件树", body)
+        self.assertIn("Data", body)
+        self.assertIn("Motion", body)
+        self.assertIn("Trim & Export", body)
+        self.assertIn("Policy", body)
+        self.assertIn("Test", body)
         self.assertIn("Physics OFF", body)
-        self.assertIn("日志", body)
-        self.assertIn("Observation", body)
-        self.assertIn("Action", body)
 
 
 class ReadmeSmokeTest(unittest.TestCase):
