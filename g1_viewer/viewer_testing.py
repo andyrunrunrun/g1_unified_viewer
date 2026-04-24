@@ -22,6 +22,7 @@ class ActiveImpulse:
     body_id: int
     force: np.ndarray
     expires_at: float
+    applied: bool = False
 
 
 def summarize_perturbation(model, data, perturb, now: float) -> ViewerInteractionSummary:
@@ -85,6 +86,14 @@ def build_active_impulse(model, command: ViewerImpulseCommand, now: float) -> Ac
 
 
 def apply_impulse_wrench(data, body_id: int, force: np.ndarray) -> None:
+    _adjust_impulse_wrench(data, body_id, np.asarray(force, dtype=float)[:3])
+
+
+def remove_impulse_wrench(data, body_id: int, force: np.ndarray) -> None:
+    _adjust_impulse_wrench(data, body_id, -np.asarray(force, dtype=float)[:3])
+
+
+def _adjust_impulse_wrench(data, body_id: int, force_delta: np.ndarray) -> None:
     xfrc_applied = getattr(data, "xfrc_applied", None)
     if xfrc_applied is None:
         return
@@ -92,16 +101,14 @@ def apply_impulse_wrench(data, body_id: int, force: np.ndarray) -> None:
     if np.ndim(xfrc_applied) == 2:
         if body_id < 0 or body_id >= int(xfrc_applied.shape[0]):
             return
-        xfrc_applied[body_id, :] = 0.0
-        xfrc_applied[body_id, :3] = np.asarray(force, dtype=float)[:3]
+        xfrc_applied[body_id, :3] = np.asarray(xfrc_applied[body_id, :3], dtype=float) + force_delta
         return
 
     start = body_id * 6
-    stop = start + 6
+    stop = start + 3
     if body_id < 0 or stop > int(np.size(xfrc_applied)):
         return
-    xfrc_applied[start:stop] = 0.0
-    xfrc_applied[start : start + 3] = np.asarray(force, dtype=float)[:3]
+    xfrc_applied[start:stop] = np.asarray(xfrc_applied[start:stop], dtype=float) + force_delta
 
 
 def _force_slice(xfrc_applied, body_id: int) -> np.ndarray | None:

@@ -16,8 +16,56 @@ from .viewer_testing import (
     ActiveImpulse,
     apply_impulse_wrench,
     build_active_impulse,
+    remove_impulse_wrench,
     summarize_perturbation,
 )
+
+
+def _replace_active_impulse(
+    data,
+    active_impulse: ActiveImpulse | None,
+    next_impulse: ActiveImpulse | None,
+) -> ActiveImpulse | None:
+    if active_impulse is not None and active_impulse.applied:
+        remove_impulse_wrench(
+            data,
+            active_impulse.body_id,
+            active_impulse.force,
+        )
+        active_impulse.applied = False
+
+    if next_impulse is None:
+        return None
+
+    if getattr(data, "xfrc_applied", None) is not None:
+        apply_impulse_wrench(
+            data,
+            next_impulse.body_id,
+            next_impulse.force,
+        )
+        next_impulse.applied = True
+    else:
+        next_impulse.applied = False
+
+    return next_impulse
+
+
+def _has_cleared_test_state(summary) -> bool:
+    test_state = getattr(summary, "test_state", None)
+    if test_state is None:
+        return False
+    return (
+        not bool(getattr(test_state, "pending_impulse", False))
+        and not getattr(test_state, "last_test_event", "")
+        and not getattr(test_state, "last_test_status", "")
+        and not (getattr(test_state, "last_impulse_command", {}) or {})
+    )
+
+
+def _clear_stale_active_impulse(summary, data, active_impulse: ActiveImpulse | None) -> ActiveImpulse | None:
+    if active_impulse is None or not _has_cleared_test_state(summary):
+        return active_impulse
+    return _replace_active_impulse(data, active_impulse, None)
 
 
 def _update_active_impulse(
@@ -27,27 +75,17 @@ def _update_active_impulse(
     *,
     tick_now: float,
 ) -> ActiveImpulse | None:
-    xfrc_applied = getattr(data, "xfrc_applied", None)
-    if xfrc_applied is not None:
-        xfrc_applied[:] = 0.0
-
     if active_impulse is None:
         return None
 
     if tick_now <= active_impulse.expires_at:
-        if xfrc_applied is not None:
-            apply_impulse_wrench(
-                data,
-                active_impulse.body_id,
-                active_impulse.force,
-            )
-        return active_impulse
+        return _replace_active_impulse(data, active_impulse, active_impulse)
 
     controller.mark_viewer_test_result(
         event="impulse completed",
         status="idle",
     )
-    return None
+    return _replace_active_impulse(data, active_impulse, None)
 
 
 class NativeViewerRuntime:
@@ -85,8 +123,19 @@ class NativeViewerRuntime:
                     self.controller.tick(now=tick_now)
                     summary = self.controller.get_session_summary()
                     with handle.lock():
+                        self._active_impulse = _clear_stale_active_impulse(
+                            summary,
+                            self.data,
+                            self._active_impulse,
+                        )
+
                         pending_impulse = self.controller.consume_viewer_impulse()
                         if pending_impulse is not None:
+                            self._active_impulse = _replace_active_impulse(
+                                self.data,
+                                self._active_impulse,
+                                None,
+                            )
                             self._active_impulse = build_active_impulse(
                                 self.model,
                                 pending_impulse,

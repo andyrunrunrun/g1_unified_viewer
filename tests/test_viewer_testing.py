@@ -5,9 +5,13 @@ from unittest.mock import patch
 import mujoco
 import numpy as np
 
-from g1_viewer.viewer_runtime import _update_active_impulse
-from g1_viewer.viewer_testing import ActiveImpulse
-from g1_viewer.viewer_testing import apply_impulse_wrench, summarize_perturbation
+from g1_viewer.viewer_runtime import _clear_stale_active_impulse, _update_active_impulse
+from g1_viewer.viewer_testing import (
+    ActiveImpulse,
+    apply_impulse_wrench,
+    remove_impulse_wrench,
+    summarize_perturbation,
+)
 
 
 class ViewerTestingHelpersTest(unittest.TestCase):
@@ -42,6 +46,34 @@ class ViewerTestingHelpersTest(unittest.TestCase):
         np.testing.assert_allclose(data.xfrc_applied[6:9], [10.0, -2.0, 3.0])
         np.testing.assert_allclose(data.xfrc_applied[9:12], [0.0, 0.0, 0.0])
 
+    def test_apply_impulse_wrench_composes_with_existing_force_and_preserves_other_slots(self) -> None:
+        data = SimpleNamespace(
+            xfrc_applied=np.array(
+                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                dtype=float,
+            )
+        )
+
+        apply_impulse_wrench(data, body_id=1, force=np.array([10.0, -2.0, 3.0], dtype=float))
+
+        np.testing.assert_allclose(data.xfrc_applied[:6], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        np.testing.assert_allclose(data.xfrc_applied[6:9], [17.0, 6.0, 12.0])
+        np.testing.assert_allclose(data.xfrc_applied[9:12], [10.0, 11.0, 12.0])
+
+    def test_remove_impulse_wrench_removes_only_owned_force(self) -> None:
+        data = SimpleNamespace(
+            xfrc_applied=np.array(
+                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 17.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                dtype=float,
+            )
+        )
+
+        remove_impulse_wrench(data, body_id=1, force=np.array([10.0, 0.0, 0.0], dtype=float))
+
+        np.testing.assert_allclose(data.xfrc_applied[:6], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        np.testing.assert_allclose(data.xfrc_applied[6:9], [7.0, 8.0, 9.0])
+        np.testing.assert_allclose(data.xfrc_applied[9:12], [10.0, 11.0, 12.0])
+
     def test_update_active_impulse_expires_without_xfrc_array(self) -> None:
         controller = SimpleNamespace()
         result_calls: list[tuple[str, str]] = []
@@ -65,3 +97,66 @@ class ViewerTestingHelpersTest(unittest.TestCase):
 
         self.assertIsNone(next_impulse)
         self.assertEqual(result_calls, [("impulse completed", "idle")])
+
+    def test_update_active_impulse_expiry_preserves_external_wrenches(self) -> None:
+        controller = SimpleNamespace()
+        result_calls: list[tuple[str, str]] = []
+
+        def mark_viewer_test_result(*, event: str, status: str) -> None:
+            result_calls.append((event, status))
+
+        controller.mark_viewer_test_result = mark_viewer_test_result
+        data = SimpleNamespace(
+            xfrc_applied=np.array(
+                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 17.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                dtype=float,
+            )
+        )
+        active_impulse = ActiveImpulse(
+            body_id=1,
+            force=np.array([10.0, 0.0, 0.0], dtype=float),
+            expires_at=4.0,
+            applied=True,
+        )
+
+        next_impulse = _update_active_impulse(
+            controller,
+            data,
+            active_impulse,
+            tick_now=5.0,
+        )
+
+        self.assertIsNone(next_impulse)
+        self.assertEqual(result_calls, [("impulse completed", "idle")])
+        np.testing.assert_allclose(data.xfrc_applied[:6], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        np.testing.assert_allclose(data.xfrc_applied[6:9], [7.0, 8.0, 9.0])
+        np.testing.assert_allclose(data.xfrc_applied[9:12], [10.0, 11.0, 12.0])
+
+    def test_clear_stale_active_impulse_drops_runtime_state_after_reset(self) -> None:
+        summary = SimpleNamespace(
+            test_state=SimpleNamespace(
+                pending_impulse=False,
+                last_test_event="",
+                last_test_status="",
+                last_impulse_command={},
+            )
+        )
+        data = SimpleNamespace(
+            xfrc_applied=np.array(
+                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 17.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                dtype=float,
+            )
+        )
+        active_impulse = ActiveImpulse(
+            body_id=1,
+            force=np.array([10.0, 0.0, 0.0], dtype=float),
+            expires_at=20.0,
+            applied=True,
+        )
+
+        next_impulse = _clear_stale_active_impulse(summary, data, active_impulse)
+
+        self.assertIsNone(next_impulse)
+        np.testing.assert_allclose(data.xfrc_applied[:6], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        np.testing.assert_allclose(data.xfrc_applied[6:9], [7.0, 8.0, 9.0])
+        np.testing.assert_allclose(data.xfrc_applied[9:12], [10.0, 11.0, 12.0])
