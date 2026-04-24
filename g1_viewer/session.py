@@ -462,6 +462,8 @@ class SessionController:
 
     def set_viewer_interaction(self, interaction: ViewerInteractionSummary) -> None:
         with self._lock:
+            if not self._viewer_test_callbacks_enabled_locked():
+                return
             self._viewer_interaction = ViewerInteractionSummary(**model_to_dict(interaction))
 
     def queue_viewer_impulse(self, request: ViewerImpulseRequest) -> SessionSummary:
@@ -493,6 +495,8 @@ class SessionController:
 
     def mark_viewer_test_result(self, *, event: str, status: str) -> None:
         with self._lock:
+            if not self._viewer_test_callbacks_enabled_locked():
+                return
             self._test_state.last_test_event = event
             self._test_state.last_test_status = status
 
@@ -577,6 +581,13 @@ class SessionController:
         self._viewer_interaction = ViewerInteractionSummary()
         self._test_state = TestStateSummary()
         self._pending_impulse = None
+
+    def _viewer_test_callbacks_enabled_locked(self) -> bool:
+        return (
+            self._viewer_connected
+            and self._physics_enabled
+            and self._get_active_sequence_locked() is not None
+        )
 
     def _require_active_sequence_locked(self) -> StateSequence:
         sequence = self._get_active_sequence_locked()

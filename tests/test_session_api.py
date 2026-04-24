@@ -321,6 +321,54 @@ class ViewerTestStateControllerTest(unittest.TestCase):
         self.assertFalse(summary.test_state.pending_impulse)
         self.assertEqual(summary.test_state.last_impulse_command, {})
 
+    def test_disconnect_blocks_stale_viewer_callbacks_from_repopulating_state(self) -> None:
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+        self.controller.mark_viewer_connected(True)
+        self.controller.toggle_physics(True)
+        self.controller.mark_viewer_connected(False)
+
+        self.controller.set_viewer_interaction(
+            ViewerInteractionSummary(
+                drag_active=True,
+                selected_body_id=2,
+                selected_body_name="torso",
+                perturb_mode="rotate",
+                force_magnitude=48.0,
+                last_drag_timestamp=4.0,
+            )
+        )
+        self.controller.mark_viewer_test_result(event="late callback", status="complete")
+        summary = self.controller.get_session_summary()
+
+        self.assertFalse(summary.viewer_interaction.drag_active)
+        self.assertEqual(summary.viewer_interaction.perturb_mode, "none")
+        self.assertEqual(summary.test_state.last_test_event, "")
+        self.assertEqual(summary.test_state.last_test_status, "")
+
+    def test_reset_transition_blocks_stale_viewer_callbacks_from_repopulating_state(self) -> None:
+        self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+        self.controller.mark_viewer_connected(True)
+        self.controller.toggle_physics(True)
+        self.controller.toggle_physics(False)
+
+        self.controller.set_viewer_interaction(
+            ViewerInteractionSummary(
+                drag_active=True,
+                selected_body_id=3,
+                selected_body_name="pelvis",
+                perturb_mode="translate",
+                force_magnitude=12.0,
+                last_drag_timestamp=8.0,
+            )
+        )
+        self.controller.mark_viewer_test_result(event="late callback", status="complete")
+        summary = self.controller.get_session_summary()
+
+        self.assertFalse(summary.viewer_interaction.drag_active)
+        self.assertEqual(summary.viewer_interaction.perturb_mode, "none")
+        self.assertEqual(summary.test_state.last_test_event, "")
+        self.assertEqual(summary.test_state.last_test_status, "")
+
 
 class ControlPanelApiTest(unittest.TestCase):
     def setUp(self) -> None:
