@@ -12,6 +12,7 @@ from .config import resolve_g1_model_path
 from .models import CanonicalRobotState
 from .physics import compute_pd_torque_targets, reset_data_to_state, state_from_data
 from .session import SessionController
+from .viewer_testing import apply_impulse_wrench, build_active_impulse, summarize_perturbation
 
 
 class NativeViewerRuntime:
@@ -31,6 +32,7 @@ class NativeViewerRuntime:
         self.target_hz = max(10.0, float(target_hz))
         self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
         self.data = mujoco.MjData(self.model)
+        self._active_impulse = None
 
     def run(self) -> None:
         with mujoco.viewer.launch_passive(
@@ -48,6 +50,34 @@ class NativeViewerRuntime:
                     self.controller.tick(now=tick_now)
                     summary = self.controller.get_session_summary()
                     with handle.lock():
+                        pending_impulse = self.controller.consume_viewer_impulse()
+                        if pending_impulse is not None:
+                            self._active_impulse = build_active_impulse(
+                                self.model,
+                                pending_impulse,
+                                tick_now,
+                            )
+                            self.controller.mark_viewer_test_result(
+                                event="impulse applied",
+                                status="running",
+                            )
+
+                        if hasattr(self.data, "xfrc_applied"):
+                            self.data.xfrc_applied[:] = 0.0
+                            if self._active_impulse is not None:
+                                if tick_now <= self._active_impulse.expires_at:
+                                    apply_impulse_wrench(
+                                        self.data,
+                                        self._active_impulse.body_id,
+                                        self._active_impulse.force,
+                                    )
+                                else:
+                                    self._active_impulse = None
+                                    self.controller.mark_viewer_test_result(
+                                        event="impulse completed",
+                                        status="idle",
+                                    )
+
                         if summary.physics_enabled:
                             reference_state = self.controller.prepare_physics_reset(now=tick_now)
                             if reference_state is not None:
@@ -89,6 +119,13 @@ class NativeViewerRuntime:
                             elevation=float(handle.cam.elevation),
                         )
                     handle.sync()
+                    interaction = summarize_perturbation(
+                        self.model,
+                        self.data,
+                        handle.perturb,
+                        now=tick_now,
+                    )
+                    self.controller.set_viewer_interaction(interaction)
                     time.sleep(1.0 / self.target_hz)
             finally:
                 self.controller.mark_viewer_connected(False)
@@ -160,6 +197,8 @@ class NativeViewerRuntime:
         )
 
     def _right_overlay(self, summary) -> str:
+        interaction = summary.viewer_interaction
+        test_state = summary.test_state
         return "\n".join(
             [
                 "Keys",
@@ -169,6 +208,8 @@ class NativeViewerRuntime:
                 "[ / ] trim start/end",
                 "N / P next/prev clip",
                 "L toggle loop",
+                f"Drag: {interaction.selected_body_name or '-'} | {interaction.perturb_mode}",
+                f"Test: {'pending' if test_state.pending_impulse else (test_state.last_test_status or '-')}",
                 f"Viewer connected: {summary.viewer_connected}",
             ]
         )
