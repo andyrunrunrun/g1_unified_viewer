@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import unittest
 from pathlib import Path
@@ -599,6 +600,40 @@ class RootPageSmokeTest(unittest.TestCase):
         self.assertIn("Policy", body)
         self.assertIn("Test", body)
         self.assertIn("Physics OFF", body)
+
+    def test_root_page_preserves_console_dom_contract(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+
+        for pane_id in ("logPane", "observationPane", "actionPane"):
+            self.assertIn(f'id="{pane_id}"', body)
+
+        for control_id in ("resetTestButton", "dragPane", "impulseMagnitudeInput", "impulseDurationInput"):
+            self.assertIn(f'id="{control_id}"', body)
+
+        for legacy_id in ("pathInput", "timeline", "policyList", "physicsToggleButton"):
+            self.assertIn(f'id="{legacy_id}"', body)
+
+        presets = re.findall(r'class="impulseButton[^"]*"\s+data-preset="([^"]+)"', body)
+        self.assertEqual(
+            presets,
+            ["push_forward", "push_backward", "push_left", "push_right", "lift_up"],
+        )
+
+    def test_root_page_script_avoids_policy_list_rebuild_during_session_poll(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+
+        self.assertIn("function syncPolicyCardStates()", body)
+        render_session_match = re.search(
+            r"function renderSession\(\) \{(?P<body>.*?)\n      \}",
+            body,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(render_session_match)
+        self.assertNotIn("renderPolicies();", render_session_match.group("body"))
 
 
 class ReadmeSmokeTest(unittest.TestCase):

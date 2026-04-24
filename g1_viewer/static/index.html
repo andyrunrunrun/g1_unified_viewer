@@ -708,6 +708,8 @@
         session: null,
         policies: [],
         selectedPolicyId: null,
+        renderedPolicySignature: null,
+        renderedPolicySelectionKey: null,
         pollHandle: null,
       };
 
@@ -794,6 +796,24 @@
 
       function selectedPolicyId() {
         return state.selectedPolicyId || activePolicyId() || state.policies[0]?.policy_id || null;
+      }
+
+      function policyManifestSignature() {
+        return JSON.stringify(
+          state.policies.map((policy) => [
+            policy.policy_id,
+            policy.display_name,
+            policy.control_mode,
+            policy.description || "",
+          ]),
+        );
+      }
+
+      function policySelectionSignature() {
+        return JSON.stringify({
+          active: activePolicyId(),
+          selected: selectedPolicyId(),
+        });
       }
 
       async function refreshSession() {
@@ -907,7 +927,7 @@
 
         renderClipSummary(session, sequence, maxFrame);
         renderDiagnostics(session);
-        renderPolicies();
+        syncPolicyCardStates();
 
         document.querySelectorAll(".tree-node.motion").forEach((row) => {
           row.classList.toggle("active", row.dataset.path === activePath);
@@ -982,8 +1002,32 @@
         });
       }
 
+      function syncPolicyCardStates() {
+        const selectionSignature = policySelectionSignature();
+        if (state.renderedPolicySelectionKey === selectionSignature) {
+          return;
+        }
+
+        const activeId = activePolicyId();
+        const selectedId = selectedPolicyId();
+        policyList.querySelectorAll("[data-policy-id]").forEach((card) => {
+          const policyId = card.dataset.policyId;
+          card.classList.toggle("active", policyId === activeId || policyId === selectedId);
+        });
+
+        state.renderedPolicySelectionKey = selectionSignature;
+      }
+
       function renderPolicies() {
+        const manifestSignature = policyManifestSignature();
+        if (state.renderedPolicySignature === manifestSignature) {
+          syncPolicyCardStates();
+          return;
+        }
+
         policyList.innerHTML = "";
+        state.renderedPolicySignature = manifestSignature;
+        state.renderedPolicySelectionKey = null;
         if (state.policies.length === 0) {
           policyList.textContent = "没有可用策略。";
           return;
@@ -994,6 +1038,7 @@
           const isActive = activePolicyId() === policy.policy_id;
           const isSelected = selectedPolicyId() === policy.policy_id;
           card.className = `card${isActive || isSelected ? " active" : ""}`;
+          card.dataset.policyId = policy.policy_id;
 
           const title = document.createElement("div");
           title.className = "title";
@@ -1009,10 +1054,12 @@
           card.addEventListener("click", () => {
             state.selectedPolicyId = policy.policy_id;
             setStatus(policyStatus, `已选择策略 ${policy.policy_id}`);
-            renderPolicies();
+            syncPolicyCardStates();
           });
           policyList.appendChild(card);
         }
+
+        syncPolicyCardStates();
       }
 
       async function togglePhysics() {
@@ -1036,11 +1083,33 @@
         await postJson("/api/policies/step", { policy_id: policyId });
       }
 
+      function readNumberInput(input, label) {
+        const rawValue = input.value.trim();
+        if (!rawValue) {
+          throw new Error(`${label} 不能为空。`);
+        }
+
+        const value = Number(rawValue);
+        if (!Number.isFinite(value)) {
+          throw new Error(`${label} 必须是数字。`);
+        }
+
+        if (input.min !== "" && value < Number(input.min)) {
+          throw new Error(`${label} 不能小于 ${input.min}。`);
+        }
+
+        if (input.max !== "" && value > Number(input.max)) {
+          throw new Error(`${label} 不能大于 ${input.max}。`);
+        }
+
+        return value;
+      }
+
       async function queueImpulse(preset) {
         await postJson("/api/viewer/test/impulse", {
           preset,
-          magnitude: Number(impulseMagnitudeInput.value),
-          duration: Number(impulseDurationInput.value),
+          magnitude: readNumberInput(impulseMagnitudeInput, "Impulse magnitude"),
+          duration: readNumberInput(impulseDurationInput, "Impulse duration"),
         });
       }
 
