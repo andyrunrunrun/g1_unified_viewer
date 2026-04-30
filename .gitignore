@@ -9,3 +9,5 @@ examples/output/*
 .worktrees/
 worktrees/
 MUJOCO_LOG.TXT
+frontend/node_modules/
+frontend/dist/

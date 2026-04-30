@@ -469,6 +469,18 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(step.status_code, 200)
         self.assertIn("mode", step.json()["result"])
 
+    def test_session_state_endpoint_returns_current_state_and_joint_names(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(SONIC_SAMPLE), "format": "sonic"})
+        self.client.post("/api/session/playback", json={"action": "seek", "frame_index": 1})
+
+        state_response = self.client.get("/api/session/state")
+
+        self.assertEqual(state_response.status_code, 200)
+        payload = state_response.json()
+        self.assertEqual(payload["frame_index"], 1)
+        self.assertGreater(len(payload["joint_names"]), 0)
+        self.assertEqual(len(payload["state"]["joint_positions"]), len(payload["joint_names"]))
+
     def test_legacy_playback_seek_alias_still_works(self) -> None:
         self.client.post("/api/session/load", json={"path": str(SONIC_SAMPLE), "format": "sonic"})
         response = self.client.post("/api/playback/seek", json={"frame_index": 2})
@@ -594,17 +606,29 @@ class RootPageSmokeTest(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         body = response.text
-        self.assertIn("Data", body)
-        self.assertIn("Motion", body)
-        self.assertIn("Trim & Export", body)
-        self.assertIn("Policy", body)
-        self.assertIn("Test", body)
-        self.assertIn("Physics OFF", body)
+        self.assertIn('id="app"', body)
+        self.assertIn("G1 Unified Viewer", body)
+        self.assertIn('type="module"', body)
+
+    def test_browser_scene_manifest_endpoint(self) -> None:
+        response = self.client.get("/api/assets/browser-scene")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        self.assertEqual(payload["robot"], "g1")
+        self.assertEqual(payload["scene_path"], "g1/g1.xml")
+        self.assertEqual(payload["files_index_url"], "/examples/scenes/files.json")
+        self.assertIn("g1/g1.xml", payload["files"])
+        self.assertIn("g1/meshes/pelvis.STL", payload["files"])
+
+    def test_frontend_favicon_endpoint(self) -> None:
+        response = self.client.get("/favicon.ico")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/vnd.microsoft.icon")
 
     def test_root_page_preserves_console_dom_contract(self) -> None:
-        response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        body = response.text
+        frontend_source = REPO_ROOT / "frontend" / "src" / "App.vue"
+        body = frontend_source.read_text(encoding="utf-8")
 
         for control_id in ("resetTestButton", "dragPane", "impulseMagnitudeInput", "impulseDurationInput"):
             self.assertIn(f'id="{control_id}"', body)
@@ -654,13 +678,12 @@ class RootPageSmokeTest(unittest.TestCase):
         )
 
     def test_root_page_script_avoids_policy_list_rebuild_during_session_poll(self) -> None:
-        response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        body = response.text
+        frontend_source = REPO_ROOT / "frontend" / "src" / "App.vue"
+        body = frontend_source.read_text(encoding="utf-8")
 
         self.assertIn("function syncPolicyCardStates()", body)
         render_session_match = re.search(
-            r"function renderSession\(\) \{(?P<body>.*?)\n      \}",
+            r"function renderSession\(\) \{(?P<body>.*?)\n\}",
             body,
             re.DOTALL,
         )

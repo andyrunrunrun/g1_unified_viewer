@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 from pathlib import Path
 
@@ -45,7 +46,13 @@ from .sim import ThreadedMujocoRenderer, fallback_png
 
 
 logger = logging.getLogger(__name__)
-static_dir = Path(__file__).resolve().parent / "static"
+package_dir = Path(__file__).resolve().parent
+repo_root = package_dir.parent
+static_dir = package_dir / "static"
+frontend_dir = repo_root / "frontend"
+frontend_dist_dir = frontend_dir / "dist"
+frontend_public_dir = frontend_dir / "public"
+browser_scene_index_path = frontend_public_dir / "examples" / "scenes" / "files.json"
 
 _default_controller = SessionController()
 _renderer: ThreadedMujocoRenderer | None = None
@@ -128,6 +135,35 @@ def _handle_viewer_test_impulse_request(
     return controller.queue_viewer_impulse(request)
 
 
+def _frontend_index_path() -> Path:
+    built_index = frontend_dist_dir / "index.html"
+    if built_index.exists():
+        return built_index
+    source_index = frontend_dir / "index.html"
+    if source_index.exists():
+        return source_index
+    return static_dir / "index.html"
+
+
+def _frontend_public_file_path(relative_path: str) -> Path | None:
+    built_file = frontend_dist_dir / relative_path
+    if built_file.exists():
+        return built_file
+    public_file = frontend_public_dir / relative_path
+    if public_file.exists():
+        return public_file
+    return None
+
+
+def _browser_scene_files() -> list[str]:
+    if not browser_scene_index_path.exists():
+        return []
+    payload = json.loads(browser_scene_index_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("Browser scene files index must be a JSON list")
+    return [str(item) for item in payload]
+
+
 def create_app(controller: SessionController | None = None) -> FastAPI:
     session = controller or _default_controller
     app = FastAPI(title="G1 Unified Viewer", version="0.2.0")
@@ -138,6 +174,10 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    if (frontend_dist_dir / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=frontend_dist_dir / "assets"), name="frontend-assets")
+    if (frontend_public_dir / "examples").exists():
+        app.mount("/examples", StaticFiles(directory=frontend_public_dir / "examples"), name="examples")
     app.state.controller = session
 
     def get_controller() -> SessionController:
@@ -145,11 +185,48 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
 
     @app.get("/")
     def root() -> FileResponse:
-        return FileResponse(static_dir / "index.html")
+        return FileResponse(_frontend_index_path())
+
+    @app.get("/favicon.ico")
+    def favicon() -> FileResponse:
+        icon_path = _frontend_public_file_path("favicon.ico")
+        if icon_path is None:
+            raise HTTPException(status_code=404, detail="favicon not found")
+        return FileResponse(icon_path, media_type="image/vnd.microsoft.icon")
+
+    @app.get("/api/assets/browser-scene")
+    def api_browser_scene() -> dict[str, object]:
+        try:
+            files = _browser_scene_files()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {
+            "robot": "g1",
+            "scene_path": "g1/g1.xml",
+            "files_index_url": "/examples/scenes/files.json",
+            "files": files,
+        }
 
     @app.get("/api/session", response_model=SessionSummary)
     def api_session() -> SessionSummary:
         return get_controller().get_session_summary()
+
+    @app.get("/api/session/state")
+    def api_session_state() -> dict[str, object]:
+        controller = get_controller()
+        summary = controller.get_session_summary()
+        sequence_summary = summary.active_sequence
+        if sequence_summary is None:
+            raise HTTPException(status_code=404, detail="No active sequence")
+        sequence = controller.get_sequence(sequence_summary.sequence_id)
+        state = controller.tick()
+        return {
+            "sequence_id": sequence.sequence_id,
+            "frame_index": summary.current_frame,
+            "joint_names": sequence.joint_names,
+            "body_names": sequence.body_names,
+            "state": state,
+        }
 
     @app.post("/api/scan", response_model=ScanResponse)
     def api_scan(request: ScanRequest) -> ScanResponse:

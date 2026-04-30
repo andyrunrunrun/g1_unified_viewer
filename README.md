@@ -92,6 +92,35 @@ uv run python main.py --port 8001
 uv run python main.py --host 0.0.0.0 --port 8001
 ```
 
+## 浏览器 MuJoCo WASM 前端
+
+控制面板已经迁移到 `frontend/` 的 Vite 应用，并嵌入基于 `mujoco-js` + Three.js 的浏览器 3D viewer。浏览器 viewer 使用：
+
+- `frontend/public/examples/scenes/` 中的 G1 MJCF 和 mesh 资源
+- `/api/assets/browser-scene` 获取默认 scene manifest
+- `/api/session/state` 轮询当前 canonical robot state 并同步到 MuJoCo WASM 模型
+
+开发前端时可以同时启动后端 API 和 Vite：
+
+```bash
+uv run python main.py --port 8000
+cd frontend
+npm install
+npm run dev
+```
+
+生产或只通过 FastAPI 访问时，先构建前端：
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+uv run python main.py
+```
+
+如果没有 `frontend/dist/`，FastAPI 会回退服务 Vite 的源码入口；这适合开发检查 HTML shell，但浏览器模块加载应优先使用 Vite dev server 或已构建的 `dist/`。
+
 ## 预加载动作
 
 可以在启动时直接传入一个动作路径：
