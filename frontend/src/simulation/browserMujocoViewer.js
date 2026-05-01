@@ -3,6 +3,11 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import loadMujoco from 'mujoco-js';
 import { Reflector } from './utils/Reflector.js';
 
+export const RENDERER_OPTIONS = Object.freeze({ antialias: true });
+export const VIEWER_PIXEL_RATIO_LIMIT = 1.5;
+export const VIEWER_SHADOWS_ENABLED = true;
+export const RENDER_THROTTLE_MS = 30;
+
 function ensureDirectory(mujoco, path) {
   if (!mujoco.FS.analyzePath(path).exists) {
     mujoco.FS.mkdir(path);
@@ -52,13 +57,65 @@ function getQuaternion(buffer, index, target, swizzle = true) {
   return target.set(buffer[index * 4], buffer[index * 4 + 1], buffer[index * 4 + 2], buffer[index * 4 + 3]);
 }
 
+function setSwizzledPosition(target, position) {
+  return target.set(position[0] ?? 0, position[2] ?? 0, -(position[1] ?? 0));
+}
+
+function setSwizzledQuaternion(target, rotationWxyz) {
+  return target.set(
+    -(rotationWxyz[1] ?? 0),
+    -(rotationWxyz[3] ?? 0),
+    rotationWxyz[2] ?? 0,
+    -(rotationWxyz[0] ?? 1)
+  );
+}
+
+function threeVectorToMujoco(values) {
+  return [
+    Number(values?.x ?? values?.[0] ?? 0),
+    -Number(values?.z ?? values?.[2] ?? 0),
+    Number(values?.y ?? values?.[1] ?? 0)
+  ];
+}
+
+export function hasBodyPositionTrack(payload) {
+  const bodyNames = payload?.body_names;
+  const bodyPositions = payload?.state?.body_positions;
+  return Array.isArray(bodyNames)
+    && Array.isArray(bodyPositions)
+    && bodyNames.length > 0
+    && bodyPositions.length >= bodyNames.length;
+}
+
+export function hasJointPositionTrack(payload) {
+  const jointNames = payload?.joint_names;
+  const jointPositions = payload?.state?.joint_positions;
+  return Array.isArray(jointNames)
+    && Array.isArray(jointPositions)
+    && jointNames.length > 0
+    && jointPositions.length >= jointNames.length;
+}
+
 function createSimulationWrapper(mujoco, model, data) {
+  const force = new Float64Array(3);
+  const torque = new Float64Array(3);
+  const point = new Float64Array(3);
+
   return {
     get qpos() {
       return data.qpos;
     },
     get qvel() {
       return data.qvel;
+    },
+    get ctrl() {
+      return data.ctrl;
+    },
+    get qfrc_applied() {
+      return data.qfrc_applied;
+    },
+    get xfrc_applied() {
+      return data.xfrc_applied;
     },
     get xpos() {
       return data.xpos;
@@ -74,6 +131,24 @@ function createSimulationWrapper(mujoco, model, data) {
     },
     forward() {
       mujoco.mj_forward(model, data);
+    },
+    step() {
+      mujoco.mj_step(model, data);
+    },
+    resetData() {
+      mujoco.mj_resetData(model, data);
+    },
+    applyForce(fx, fy, fz, tx, ty, tz, px, py, pz, bodyId) {
+      force[0] = fx;
+      force[1] = fy;
+      force[2] = fz;
+      torque[0] = tx;
+      torque[1] = ty;
+      torque[2] = tz;
+      point[0] = px;
+      point[1] = py;
+      point[2] = pz;
+      mujoco.mj_applyFT(model, data, force, torque, point, bodyId, data.qfrc_applied);
     },
     free() {
       data.delete();
@@ -157,13 +232,74 @@ function makeGeometry(mujoco, model, geomId, meshes) {
   return new THREE.SphereGeometry(size[0] || 0.02, 12, 8);
 }
 
-function makeMaterial(model, geomId) {
+function arrayIsZeroFilled(values) {
+  if (!values || values.length === 0) {
+    return true;
+  }
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      if (!arrayIsZeroFilled(value)) {
+        return false;
+      }
+    } else if (Math.abs(Number(value) || 0) > 1e-8) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function clampControl(model, actuatorIndex, value) {
+  const range = model?.actuator_ctrlrange;
+  if (!range || range.length < (actuatorIndex + 1) * 2) {
+    return value;
+  }
+  const min = range[actuatorIndex * 2];
+  const max = range[actuatorIndex * 2 + 1];
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) {
+    return value;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function zeroArray(values) {
+  if (!values) {
+    return;
+  }
+  for (let index = 0; index < values.length; index += 1) {
+    values[index] = 0;
+  }
+}
+
+function buildActuatorAddressByJointName(model, mujoco, jointNames) {
+  const actuatorAddressByJointName = new Map();
+  const jointTransmission = mujoco?.mjtTrn?.mjTRN_JOINT?.value;
+  const actuatorTransmissionTypes = model?.actuator_trntype;
+  const actuatorJointIds = model?.actuator_trnid;
+  if (!model || !actuatorTransmissionTypes || !actuatorJointIds || jointTransmission === undefined) {
+    return actuatorAddressByJointName;
+  }
+
+  for (let actuatorIndex = 0; actuatorIndex < model.nu; actuatorIndex += 1) {
+    if (actuatorTransmissionTypes[actuatorIndex] !== jointTransmission) {
+      continue;
+    }
+    const jointIndex = actuatorJointIds[actuatorIndex * 2];
+    const jointName = jointNames[jointIndex];
+    if (jointName) {
+      actuatorAddressByJointName.set(jointName, actuatorIndex);
+    }
+  }
+  return actuatorAddressByJointName;
+}
+
+export function createMaterialResources(model, geomId) {
   let color = [
     model.geom_rgba[geomId * 4],
     model.geom_rgba[geomId * 4 + 1],
     model.geom_rgba[geomId * 4 + 2],
     model.geom_rgba[geomId * 4 + 3]
   ];
+  let texture = undefined;
   const materialId = model.geom_matid[geomId];
   if (materialId !== -1) {
     color = [
@@ -172,12 +308,75 @@ function makeMaterial(model, geomId) {
       model.mat_rgba[materialId * 4 + 2],
       model.mat_rgba[materialId * 4 + 3]
     ];
+
+    const mjNTEXROLE = 10;
+    const mjTEXROLE_RGB = 1;
+    const textureId = model.mat_texid[(materialId * mjNTEXROLE) + mjTEXROLE_RGB];
+    if (textureId !== -1) {
+      const width = model.tex_width[textureId];
+      const height = model.tex_height[textureId];
+      const offset = model.tex_adr[textureId];
+      const channels = model.tex_nchannel[textureId];
+      const rgba = new Uint8Array(width * height * 4);
+
+      for (let pixel = 0; pixel < width * height; pixel += 1) {
+        const source = offset + pixel * channels;
+        const target = pixel * 4;
+        rgba[target] = model.tex_data[source];
+        rgba[target + 1] = channels > 1 ? model.tex_data[source + 1] : rgba[target];
+        rgba[target + 2] = channels > 2 ? model.tex_data[source + 2] : rgba[target];
+        rgba[target + 3] = channels > 3 ? model.tex_data[source + 3] : 255;
+      }
+
+      texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+      texture.repeat = new THREE.Vector2(
+        model.mat_texrepeat[materialId * 2],
+        model.mat_texrepeat[materialId * 2 + 1]
+      );
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.needsUpdate = true;
+    }
   }
-  return new THREE.MeshPhysicalMaterial({
+
+  return {
     color: new THREE.Color(color[0], color[1], color[2]),
-    transparent: color[3] < 1.0,
-    opacity: color[3]
+    opacity: color[3],
+    texture
+  };
+}
+
+function makeMaterial(model, geomId) {
+  const materialResources = createMaterialResources(model, geomId);
+  const materialId = model.geom_matid[geomId];
+  const materialOptions = {
+    color: materialResources.color,
+    transparent: materialResources.opacity < 1.0,
+    opacity: materialResources.opacity,
+    specularIntensity: materialId !== -1 ? model.mat_specular[materialId] : undefined,
+    reflectivity: materialId !== -1 ? model.mat_reflectance[materialId] : undefined,
+    roughness: materialId !== -1 ? Math.max(0, 1.0 - model.mat_shininess[materialId]) : undefined,
+    metalness: materialId !== -1 ? model.mat_metallic[materialId] : undefined
+  };
+  if (materialResources.texture) {
+    materialOptions.map = materialResources.texture;
+  }
+  return new THREE.MeshPhysicalMaterial(materialOptions);
+}
+
+export function makePlaneMesh(texture) {
+  const mesh = new Reflector(new THREE.PlaneGeometry(100, 100), {
+    clipBias: 0.003,
+    texture,
+    textureWidth: 512,
+    textureHeight: 512,
+    multisample: 2
   });
+  mesh.rotateX(-Math.PI / 2);
+  mesh.material.depthWrite = false;
+  mesh.receiveShadow = true;
+  mesh.renderOrder = -1;
+  return mesh;
 }
 
 async function loadScene(mujoco, scenePath, parent) {
@@ -212,15 +411,12 @@ async function loadScene(mujoco, scenePath, parent) {
     const type = model.geom_type[geomId];
     let mesh;
     if (type === mujoco.mjtGeom.mjGEOM_PLANE.value) {
-      mesh = new Reflector(new THREE.PlaneGeometry(80, 80), { clipBias: 0.003 });
-      mesh.rotateX(-Math.PI / 2);
-      mesh.material.depthWrite = false;
-      mesh.renderOrder = -1;
+      mesh = makePlaneMesh(createMaterialResources(model, geomId).texture);
     } else {
       mesh = new THREE.Mesh(makeGeometry(mujoco, model, geomId, meshes), makeMaterial(model, geomId));
     }
-    mesh.castShadow = geomId !== 0;
-    mesh.receiveShadow = true;
+    mesh.castShadow = VIEWER_SHADOWS_ENABLED && geomId !== 0;
+    mesh.receiveShadow = VIEWER_SHADOWS_ENABLED;
     mesh.bodyID = bodyId;
     getPosition(model.geom_pos, geomId, mesh.position);
     if (type !== mujoco.mjtGeom.mjGEOM_PLANE.value) {
@@ -244,11 +440,15 @@ async function loadScene(mujoco, scenePath, parent) {
 
   const sunlight = new THREE.DirectionalLight(0xffffff, 2.4);
   sunlight.position.set(4, 8, 5);
-  sunlight.castShadow = true;
+  sunlight.shadow.mapSize.width = 1024;
+  sunlight.shadow.mapSize.height = 1024;
+  sunlight.shadow.camera.near = 0.1;
+  sunlight.shadow.camera.far = 12;
+  sunlight.castShadow = VIEWER_SHADOWS_ENABLED;
   root.add(sunlight);
   lights.push(sunlight);
 
-  return { model, data, simulation, bodies, lights, bodyNames };
+  return { model, data, simulation, bodies, lights, bodyNames, modelRoot: root };
 }
 
 export class BrowserMujocoViewer {
@@ -260,20 +460,36 @@ export class BrowserMujocoViewer {
     this.data = null;
     this.simulation = null;
     this.bodies = {};
+    this.bodyIdByName = new Map();
+    this.modelRoot = null;
+    this.highDetailBodies = [];
+    this.bodyTrackPositions = [];
     this.jointAddressByName = new Map();
+    this.jointVelocityAddressByName = new Map();
+    this.actuatorAddressByJointName = new Map();
     this.lastFrameKey = null;
+    this.followEnabled = true;
+    this.followHeight = 0.75;
+    this.followBodyId = null;
+    this.followDesired = new THREE.Vector3();
+    this.followTarget = new THREE.Vector3();
+    this.followDelta = new THREE.Vector3();
+    this.followInitialized = false;
     this.disposed = false;
+    this.renderRequested = false;
+    this.lastRenderTime = 0;
+    this.activeImpulse = null;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x101820);
+    this.scene.background = new THREE.Color(0x263f59);
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.001, 100);
     this.camera.position.set(3.0, 2.2, 3.0);
     this.scene.add(this.camera);
 
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.shadowMap.enabled = true;
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.16));
+    this.renderer = new THREE.WebGLRenderer(RENDERER_OPTIONS);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, VIEWER_PIXEL_RATIO_LIMIT));
+    this.renderer.shadowMap.enabled = VIEWER_SHADOWS_ENABLED;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.container.appendChild(this.renderer.domElement);
 
@@ -281,12 +497,14 @@ export class BrowserMujocoViewer {
     this.controls.target.set(0, 0.75, 0);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.1;
+    this.handleControlsChange = () => this.requestRender();
+    this.controls.addEventListener('change', this.handleControlsChange);
     this.controls.update();
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
-    this.renderer.setAnimationLoop(() => this.render());
     this.resize();
+    this.renderer.setAnimationLoop(this.render.bind(this));
   }
 
   async init(sceneManifest) {
@@ -299,11 +517,22 @@ export class BrowserMujocoViewer {
     this.statusCallback('Building Three.js scene...');
     const loaded = await loadScene(this.mujoco, sceneManifest.scene_path, this);
     Object.assign(this, loaded);
+    this.bodyIdByName = new Map(this.bodyNames.map((name, index) => [name, index]));
+    this.followBodyId = this.bodyIdByName.get('pelvis') ?? this.bodyIdByName.get('base') ?? (this.model.nbody > 1 ? 1 : 0);
+    this.followInitialized = false;
+    this.highDetailBodies = Object.entries(this.bodies)
+      .filter(([bodyId]) => Number(bodyId) > 0)
+      .map(([, body]) => body);
     this.jointNamesMJC = decodeNames(this.model, this.model.name_jntadr, this.model.njnt);
     this.jointAddressByName = new Map(
       this.jointNamesMJC.map((name, index) => [name, this.model.jnt_qposadr[index]])
     );
+    this.jointVelocityAddressByName = new Map(
+      this.jointNamesMJC.map((name, index) => [name, this.model.jnt_dofadr[index]])
+    );
+    this.actuatorAddressByJointName = buildActuatorAddressByJointName(this.model, this.mujoco, this.jointNamesMJC);
     this.applyDefaultPose();
+    this.requestRender();
     this.statusCallback('Browser MuJoCo viewer ready');
   }
 
@@ -313,6 +542,7 @@ export class BrowserMujocoViewer {
     }
     this.simulation.forward();
     this.syncBodies();
+    this.requestRender();
   }
 
   applyState(payload) {
@@ -344,8 +574,249 @@ export class BrowserMujocoViewer {
         qpos[address] = Number(values[index] ?? 0);
       }
     }
+    if (hasJointPositionTrack(payload) || !hasBodyPositionTrack(payload) || !this.canApplyNamedBodyTrack(payload)) {
+      this.setHighDetailVisible(true);
+      this.simulation.forward();
+      this.syncBodies();
+    } else {
+      this.setHighDetailVisible(true);
+      this.syncBodyPositionTrack(payload);
+    }
+    this.requestRender();
+  }
+
+  resetPhysics(payload) {
+    if (!this.simulation) {
+      return;
+    }
+    this.simulation.resetData?.();
+    this.lastFrameKey = null;
+    const normalizedPayload = payload?.state
+      ? payload
+      : {
+          sequence_id: 'physics_reset',
+          frame_index: 0,
+          joint_names: this.jointNamesMJC || [],
+          body_names: this.bodyNames || [],
+          state: payload
+        };
+    this.applyState(normalizedPayload);
+    zeroArray(this.simulation.ctrl);
+    zeroArray(this.simulation.qfrc_applied);
+    this.activeImpulse = null;
+  }
+
+  stepPhysics(options = {}) {
+    if (!this.simulation || !this.model) {
+      return null;
+    }
+    const steps = Math.max(1, Math.floor(options.steps ?? 1));
+    const jointNames = options.joint_names || [];
+    const targets = options.joint_positions || [];
+    const kp = options.kp || [];
+    const kd = options.kd || [];
+    const now = Number(options.now ?? performance.now());
+
+    for (let step = 0; step < steps; step += 1) {
+      zeroArray(this.simulation.ctrl);
+      zeroArray(this.simulation.qfrc_applied);
+      this.applyActiveImpulse(now);
+
+      const count = Math.min(jointNames.length, targets.length);
+      for (let index = 0; index < count; index += 1) {
+        const jointName = jointNames[index];
+        const qposAddress = this.jointAddressByName?.get(jointName) ?? 7 + index;
+        const qvelAddress = this.jointVelocityAddressByName?.get(jointName) ?? 6 + index;
+        const ctrlAddress = this.actuatorAddressByJointName?.get(jointName) ?? index;
+        if (
+          qposAddress >= this.simulation.qpos.length
+          || qvelAddress >= this.simulation.qvel.length
+          || ctrlAddress >= (this.simulation.ctrl?.length ?? 0)
+        ) {
+          continue;
+        }
+        const stiffness = Number(kp[index] ?? options.defaultKp ?? 35);
+        const damping = Number(kd[index] ?? options.defaultKd ?? 1.5);
+        const torque = stiffness * (Number(targets[index] ?? 0) - this.simulation.qpos[qposAddress])
+          - damping * this.simulation.qvel[qvelAddress];
+        this.simulation.ctrl[ctrlAddress] = clampControl(this.model, ctrlAddress, torque);
+      }
+
+      this.simulation.step();
+    }
+
     this.simulation.forward();
     this.syncBodies();
+    this.requestRender();
+    return this.readState(jointNames);
+  }
+
+  getPhysicsDecimation(targetControlDt = 0.02) {
+    const timestep = Number(this.model?.opt?.timestep ?? 0);
+    if (!Number.isFinite(timestep) || timestep <= 0) {
+      return 1;
+    }
+    return Math.max(1, Math.round(Number(targetControlDt) / timestep));
+  }
+
+  readState(jointNames = this.jointNamesMJC || []) {
+    const qpos = this.simulation?.qpos;
+    const qvel = this.simulation?.qvel;
+    if (!qpos || !qvel) {
+      return null;
+    }
+    const names = jointNames.length ? jointNames : (this.jointNamesMJC || []);
+    const jointPositions = [];
+    const jointVelocities = [];
+    for (let index = 0; index < names.length; index += 1) {
+      const qposAddress = this.jointAddressByName?.get(names[index]) ?? 7 + index;
+      const qvelAddress = this.jointVelocityAddressByName?.get(names[index]) ?? 6 + index;
+      jointPositions.push(Number(qpos[qposAddress] ?? 0));
+      jointVelocities.push(Number(qvel[qvelAddress] ?? 0));
+    }
+    return {
+      timestamp: performance.now() / 1000,
+      root_translation: [Number(qpos[0] ?? 0), Number(qpos[1] ?? 0), Number(qpos[2] ?? 0.78)],
+      root_rotation_wxyz: [Number(qpos[3] ?? 1), Number(qpos[4] ?? 0), Number(qpos[5] ?? 0), Number(qpos[6] ?? 0)],
+      joint_positions: jointPositions,
+      joint_velocities: jointVelocities
+    };
+  }
+
+  queueImpulse({ preset, magnitude = 80, duration = 0.15, bodyName = null } = {}) {
+    const forceByPreset = {
+      push_forward: [magnitude, 0, 0],
+      push_backward: [-magnitude, 0, 0],
+      push_left: [0, magnitude, 0],
+      push_right: [0, -magnitude, 0],
+      lift_up: [0, 0, magnitude]
+    };
+    const force = forceByPreset[preset];
+    if (!force) {
+      throw new Error(`Unknown impulse preset: ${preset}`);
+    }
+    this.activeImpulse = {
+      bodyId: this.resolveImpulseBodyId(bodyName),
+      force,
+      expiresAt: performance.now() + Number(duration) * 1000
+    };
+  }
+
+  resolveImpulseBodyId(bodyName) {
+    if (bodyName && this.bodyIdByName.has(bodyName)) {
+      return this.bodyIdByName.get(bodyName);
+    }
+    for (const candidate of ['pelvis', 'base', 'torso_link', 'trunk']) {
+      if (this.bodyIdByName.has(candidate)) {
+        return this.bodyIdByName.get(candidate);
+      }
+    }
+    return this.model?.nbody > 1 ? 1 : 0;
+  }
+
+  applyActiveImpulse(now) {
+    if (!this.activeImpulse) {
+      return;
+    }
+    if (now > this.activeImpulse.expiresAt) {
+      this.activeImpulse = null;
+      return;
+    }
+    const body = this.bodies[this.activeImpulse.bodyId];
+    const point = body?.position || { x: 0, y: 0, z: 0 };
+    const force = threeVectorToMujoco(this.activeImpulse.force);
+    const mujocoPoint = threeVectorToMujoco(point);
+    this.simulation.applyForce?.(
+      force[0],
+      force[1],
+      force[2],
+      0,
+      0,
+      0,
+      mujocoPoint[0],
+      mujocoPoint[1],
+      mujocoPoint[2],
+      this.activeImpulse.bodyId
+    );
+  }
+
+  canApplyNamedBodyTrack(payload) {
+    if (arrayIsZeroFilled(payload?.state?.body_positions)) {
+      return false;
+    }
+    return payload.body_names.some((bodyName) => this.bodyIdByName.has(bodyName));
+  }
+
+  syncBodyPositionTrack(payload) {
+    const state = payload.state;
+    const root = new THREE.Vector3();
+    const rootQuaternion = new THREE.Quaternion();
+    setSwizzledPosition(root, state.root_translation || [0, 0, 0.78]);
+    setSwizzledQuaternion(rootQuaternion, state.root_rotation_wxyz || [1, 0, 0, 0]);
+
+    const bodyPositions = state.body_positions || [];
+    const bodyRotations = state.body_rotations_wxyz || [];
+    const tempPosition = new THREE.Vector3();
+    const tempQuaternion = new THREE.Quaternion();
+    for (let trackIndex = 0; trackIndex < bodyPositions.length; trackIndex += 1) {
+      const bodyName = payload.body_names[trackIndex];
+      const bodyId = this.bodyIdByName.get(bodyName);
+      const body = this.bodies[bodyId];
+      const position = bodyPositions[trackIndex];
+      if (!position) {
+        continue;
+      }
+      setSwizzledPosition(tempPosition, position);
+      tempPosition.applyQuaternion(rootQuaternion).add(root);
+      if (!this.bodyTrackPositions[trackIndex]) {
+        this.bodyTrackPositions[trackIndex] = new THREE.Vector3();
+      }
+      this.bodyTrackPositions[trackIndex].copy(tempPosition);
+
+      if (!body) {
+        continue;
+      }
+      body.position.copy(tempPosition);
+
+      const rotation = bodyRotations[trackIndex];
+      if (rotation) {
+        setSwizzledQuaternion(tempQuaternion, rotation);
+        body.quaternion.copy(rootQuaternion).multiply(tempQuaternion);
+      } else if (trackIndex === 0) {
+        body.quaternion.copy(rootQuaternion);
+      }
+      body.updateWorldMatrix();
+    }
+  }
+
+  setHighDetailVisible(visible) {
+    for (const body of this.highDetailBodies) {
+      body.visible = visible;
+    }
+  }
+
+  updateCameraFollow() {
+    if (!this.followEnabled || this.followBodyId === null || this.followBodyId === undefined) {
+      return;
+    }
+    const body = this.bodies[this.followBodyId];
+    if (!body) {
+      return;
+    }
+    const desired = this.followDesired || new THREE.Vector3();
+    desired.set(body.position.x, this.followHeight, body.position.z);
+    if (!this.followInitialized) {
+      this.followTarget.copy(desired);
+      this.followInitialized = true;
+    } else {
+      this.followTarget.copy(desired);
+    }
+    this.followDelta.subVectors(this.followTarget, this.controls.target);
+    if (this.followDelta.lengthSq() < 1e-10) {
+      return;
+    }
+    this.controls.target.copy(this.followTarget);
+    this.camera.position.add(this.followDelta);
   }
 
   syncBodies() {
@@ -369,12 +840,28 @@ export class BrowserMujocoViewer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.lastRenderTime = 0;
+  }
+
+  requestRender() {
+    if (this.disposed || this.renderRequested) {
+      return;
+    }
+    this.renderRequested = true;
   }
 
   render() {
     if (this.disposed) {
       return;
     }
+    const now = performance.now();
+    const shouldRender = this.renderRequested || now - this.lastRenderTime >= RENDER_THROTTLE_MS;
+    if (!shouldRender) {
+      return;
+    }
+    this.renderRequested = false;
+    this.lastRenderTime = now;
+    this.updateCameraFollow();
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -383,6 +870,8 @@ export class BrowserMujocoViewer {
     this.disposed = true;
     this.renderer.setAnimationLoop(null);
     this.resizeObserver?.disconnect();
+    this.controls.removeEventListener('change', this.handleControlsChange);
+    this.controls.dispose();
     this.simulation?.free();
     this.renderer.dispose();
     this.container.replaceChildren();

@@ -209,7 +209,12 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
 
     @app.get("/api/session", response_model=SessionSummary)
     def api_session() -> SessionSummary:
-        return get_controller().get_session_summary()
+        controller = get_controller()
+        summary = controller.get_session_summary()
+        if summary.playback_state == "playing":
+            controller.tick()
+            summary = controller.get_session_summary()
+        return summary
 
     @app.get("/api/session/state")
     def api_session_state() -> dict[str, object]:
@@ -220,6 +225,7 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="No active sequence")
         sequence = controller.get_sequence(sequence_summary.sequence_id)
         state = controller.tick()
+        summary = controller.get_session_summary()
         return {
             "sequence_id": sequence.sequence_id,
             "frame_index": summary.current_frame,
@@ -270,7 +276,12 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
         start = max(0, request.start)
         end = min(sequence.frame_count, request.end)
         stride = max(1, request.stride)
-        return FrameSliceResponse(sequence_id=sequence.sequence_id, frames=sequence.frames[start:end:stride])
+        return FrameSliceResponse(
+            sequence_id=sequence.sequence_id,
+            joint_names=sequence.joint_names,
+            body_names=sequence.body_names,
+            frames=sequence.frames[start:end:stride],
+        )
 
     @app.get("/api/render_frame/{sequence_id}/{frame_index}")
     def api_render_frame(

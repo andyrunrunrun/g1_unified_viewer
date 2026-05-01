@@ -635,7 +635,7 @@ class SessionController:
             return
 
         if next_frame >= max_frame:
-            self._current_frame = max_frame
+            self._current_frame = 0
             self._playback_state = "stopped"
             self._last_playback_time = None
             self._frame_accumulator = 0.0

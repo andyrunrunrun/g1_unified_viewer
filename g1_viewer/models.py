@@ -173,6 +173,8 @@ class GetFramesRequest(BaseModel):
 
 class FrameSliceResponse(BaseModel):
     sequence_id: str
+    joint_names: list[str] = Field(default_factory=list)
+    body_names: list[str] = Field(default_factory=list)
     frames: list[CanonicalRobotState]
 
 

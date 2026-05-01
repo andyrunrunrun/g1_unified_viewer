@@ -4,6 +4,7 @@ import json
 import re
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -60,6 +61,18 @@ class SessionControllerTest(unittest.TestCase):
         wrapped = self.controller.get_session_summary()
         self.assertLess(wrapped.current_frame, sequence.frame_count)
         self.assertTrue(wrapped.loop_enabled)
+
+    def test_non_loop_playback_resets_to_first_frame_when_complete(self) -> None:
+        sequence = self.controller.load_clip(str(SONIC_SAMPLE), "sonic")
+
+        self.controller.play(now=10.0)
+        self.controller.tick(now=20.0)
+        summary = self.controller.get_session_summary()
+
+        self.assertEqual(summary.playback_state, "stopped")
+        self.assertEqual(summary.current_frame, 0)
+        self.assertFalse(summary.loop_enabled)
+        self.assertGreater(sequence.frame_count, 1)
 
     def test_start_and_stop_policy_updates_view_mode(self) -> None:
         self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
@@ -481,6 +494,29 @@ class GroupedApiTest(unittest.TestCase):
         self.assertGreater(len(payload["joint_names"]), 0)
         self.assertEqual(len(payload["state"]["joint_positions"]), len(payload["joint_names"]))
 
+    def test_session_state_endpoint_reports_frame_index_after_tick(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
+        self.controller.play(now=0.0)
+        self.controller._last_playback_time = time.monotonic() - 0.5
+
+        state_response = self.client.get("/api/session/state")
+
+        self.assertEqual(state_response.status_code, 200)
+        payload = state_response.json()
+        self.assertEqual(payload["frame_index"], payload["state"]["metadata"]["frame_index"])
+        self.assertGreater(payload["frame_index"], 0)
+
+    def test_session_summary_advances_playback_without_full_state_polling(self) -> None:
+        self.client.post("/api/session/load", json={"path": str(TWIST2_SAMPLE), "format": "twist2"})
+        self.controller.play(now=0.0)
+        self.controller._last_playback_time = time.monotonic() - 0.5
+
+        summary_response = self.client.get("/api/session")
+
+        self.assertEqual(summary_response.status_code, 200)
+        payload = summary_response.json()
+        self.assertGreater(payload["current_frame"], 0)
+
     def test_legacy_playback_seek_alias_still_works(self) -> None:
         self.client.post("/api/session/load", json={"path": str(SONIC_SAMPLE), "format": "sonic"})
         response = self.client.post("/api/playback/seek", json={"frame_index": 2})
@@ -621,6 +657,16 @@ class RootPageSmokeTest(unittest.TestCase):
         self.assertIn("g1/g1.xml", payload["files"])
         self.assertIn("g1/meshes/pelvis.STL", payload["files"])
 
+    def test_browser_scene_groundplane_uses_classic_blue_checker_texture(self) -> None:
+        scene_path = REPO_ROOT / "frontend" / "public" / "examples" / "scenes" / "g1" / "g1.xml"
+        root = ET.parse(scene_path).getroot()
+        groundplane = root.find(".//asset/texture[@name='groundplane']")
+
+        self.assertIsNotNone(groundplane)
+        self.assertEqual(groundplane.get("rgb1"), "0.2 0.3 0.4")
+        self.assertEqual(groundplane.get("rgb2"), "0.1 0.2 0.3")
+        self.assertEqual(groundplane.get("markrgb"), "0.8 0.8 0.8")
+
     def test_frontend_favicon_endpoint(self) -> None:
         response = self.client.get("/favicon.ico")
         self.assertEqual(response.status_code, 200)
@@ -649,9 +695,6 @@ class RootPageSmokeTest(unittest.TestCase):
             "trimSummary",
             "exportButton",
             "policyList",
-            "startPolicyButton",
-            "stopPolicyButton",
-            "stepPolicyButton",
             "physicsToggleButton",
             "viewerBadge",
             "modeBadge",
@@ -670,6 +713,9 @@ class RootPageSmokeTest(unittest.TestCase):
             "actionPane",
         ):
             self.assertIn(f'id="{legacy_id}"', body)
+
+        self.assertIn("switchSelectedPolicy(policy.policy_id)", body)
+        self.assertIn(':disabled="policyDisabled(policy)"', body)
 
         presets = re.findall(r'class="impulseButton[^"]*"\s+data-preset="([^"]+)"', body)
         self.assertEqual(
