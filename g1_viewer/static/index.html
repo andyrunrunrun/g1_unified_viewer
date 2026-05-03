@@ -536,9 +536,14 @@
                 <p>Scan the catalog root and browse the motion tree without leaving the console.</p>
               </div>
               <div class="section-stack">
-                <input id="pathInput" type="text" placeholder="输入数据根目录" />
+                <input
+                  id="pathInput"
+                  type="text"
+                  placeholder="输入数据根目录"
+                  value="/home/huanghao/source/datasets/gmr_retarget_x/AMASS_numpy123"
+                />
                 <button id="scanButton">Scan</button>
-                <div class="status" id="treeStatus">输入数据根目录后扫描。</div>
+                <div class="status" id="treeStatus">默认数据根目录已填入，点击 Scan 读取。</div>
                 <div class="tree" id="treeRoot"></div>
               </div>
             </section>

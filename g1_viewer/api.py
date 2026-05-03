@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import json
+import mimetypes
 import time
 from pathlib import Path
 
@@ -46,12 +47,14 @@ from .sim import ThreadedMujocoRenderer, fallback_png
 
 
 logger = logging.getLogger(__name__)
+mimetypes.add_type("application/octet-stream", ".onnx")
 package_dir = Path(__file__).resolve().parent
 repo_root = package_dir.parent
 static_dir = package_dir / "static"
 frontend_dir = repo_root / "frontend"
 frontend_dist_dir = frontend_dir / "dist"
 frontend_public_dir = frontend_dir / "public"
+policy_plugins_dir = repo_root / "policy_plugins"
 browser_scene_index_path = frontend_public_dir / "examples" / "scenes" / "files.json"
 
 _default_controller = SessionController()
@@ -178,6 +181,8 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
         app.mount("/assets", StaticFiles(directory=frontend_dist_dir / "assets"), name="frontend-assets")
     if (frontend_public_dir / "examples").exists():
         app.mount("/examples", StaticFiles(directory=frontend_public_dir / "examples"), name="examples")
+    if policy_plugins_dir.exists():
+        app.mount("/policy-plugins", StaticFiles(directory=policy_plugins_dir), name="policy-plugins")
     app.state.controller = session
 
     def get_controller() -> SessionController:
@@ -244,8 +249,8 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
     @app.post("/api/browser/list", response_model=BrowserListResponse)
     def api_browser_list(request: BrowserListRequest) -> BrowserListResponse:
         try:
-            root, nodes = get_controller().list_browser(request.path)
-            return BrowserListResponse(root=root, nodes=nodes)
+            root, parent, nodes = get_controller().list_browser(request.path)
+            return BrowserListResponse(root=root, parent=parent, nodes=nodes)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -421,11 +426,20 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
     def api_trim_export(request: TrimExportRequest) -> TrimExportResponse:
         try:
             sequence = get_controller().get_sequence(request.sequence_id)
-            output_path = export_trimmed_sequence(sequence, request.start_frame, request.end_frame)
+            export_root = Path(request.output_dir).expanduser().resolve() if request.output_dir else None
+            output_path = export_trimmed_sequence(
+                sequence,
+                request.start_frame,
+                request.end_frame,
+                export_root=export_root,
+                export_format=request.export_format,
+                twist2_extension=request.twist2_extension,
+                use_format_subdir=request.output_dir is None,
+            )
             frame_count = request.end_frame - request.start_frame + 1
             return TrimExportResponse(
                 output_path=str(output_path),
-                export_format=sequence.source_format,
+                export_format=request.export_format or sequence.source_format,  # type: ignore[arg-type]
                 frame_count=frame_count,
             )
         except KeyError as exc:
@@ -436,6 +450,19 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
     @app.get("/api/policies", response_model=PolicyListResponse)
     def api_policies() -> PolicyListResponse:
         return PolicyListResponse(policies=get_controller().list_policies())
+
+    @app.get("/api/policy-plugins", response_model=PolicyListResponse)
+    def api_policy_plugins() -> PolicyListResponse:
+        return PolicyListResponse(policies=get_controller().list_policies())
+
+    @app.get("/api/policy-plugins/{policy_id}/config")
+    def api_policy_plugin_config(policy_id: str) -> dict[str, object]:
+        try:
+            return get_controller().policy_config(policy_id)
+        except PolicyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/policies/active", response_model=PolicyOperationResponse)
     def api_policy_active(request: PolicyActivationRequest) -> PolicyOperationResponse:

@@ -1,0 +1,14 @@
+{
+  "policy_id": "mock_passthrough",
+  "display_name": "Mock Passthrough",
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "mock",
+  "control_mode": "joint_position_target",
+  "config_path": "/examples/checkpoints/g1/tracking_policy_latest.json",
+  "tags": [
+    "mock",
+    "browser"
+  ],
+  "description": "Browser-local target passthrough. With physics off this behaves like motion playback."
+}

@@ -7,6 +7,7 @@ import {
   quatMultiply,
   quatToRot6d
 } from './utils/math.js';
+import { Twist2StudentFutureObs } from '../../../policy_plugins/twist2/Twist2StudentFutureObs.js';
 
 class BootIndicator {
   get size() {
@@ -261,5 +262,6 @@ export const Observations = {
   TargetRootZObs,
   TargetJointPosObs,
   TargetProjectedGravityBObs,
-  PrevActions
+  PrevActions,
+  Twist2StudentFutureObs
 };

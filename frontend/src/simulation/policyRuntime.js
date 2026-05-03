@@ -3,30 +3,63 @@ import { Observations } from './observationHelpers.js';
 import { TrackingHelper } from './trackingHelper.js';
 import { toFloatArray } from './utils/math.js';
 
-export const BROWSER_POLICY_MANIFESTS = Object.freeze([
+export const DEFAULT_BROWSER_POLICY_MANIFESTS = Object.freeze([
   {
     policy_id: 'mock_passthrough',
     display_name: 'Mock Passthrough',
+    display_name_i18n: {
+      zh: 'Mock 直通',
+      en: 'Mock Passthrough'
+    },
+    runtime: 'browser',
     framework: 'mock',
     control_mode: 'joint_position_target',
     config_path: '/examples/checkpoints/g1/tracking_policy_latest.json',
-    description: 'Browser-local target passthrough. With physics off this behaves like motion playback.'
+    description: 'Browser-local target passthrough. With physics off this behaves like motion playback.',
+    description_i18n: {
+      zh: '浏览器本地目标直通；关闭仿真时等同于直接播放动作。',
+      en: 'Browser-local target passthrough. With physics off this behaves like motion playback.'
+    }
   },
   {
-    policy_id: 'g1_tracking_onnx',
-    display_name: 'G1 Tracking ONNX',
+    policy_id: 'motion_tracking',
+    display_name: 'Motion Tracking',
+    display_name_i18n: {
+      zh: '运动追踪',
+      en: 'Motion Tracking'
+    },
+    runtime: 'browser',
     framework: 'onnx',
+    format_id: 'motion_tracking',
     control_mode: 'joint_position_target',
-    config_path: '/examples/checkpoints/g1/tracking_policy_latest.json',
-    description: 'Browser ONNX Runtime Web policy loader compatible with humanoid-policy-viewer checkpoints.'
+    config_path: '/api/policy-plugins/motion_tracking/config',
+    description: 'Browser ONNX Runtime Web policy loader compatible with humanoid-policy-viewer checkpoints.',
+    description_i18n: {
+      zh: '浏览器 ONNX Runtime Web 运动追踪策略，兼容 humanoid-policy-viewer 检查点。',
+      en: 'Browser ONNX Runtime Web motion tracking policy compatible with humanoid-policy-viewer checkpoints.'
+    }
   }
 ]);
+
+export function browserRunnablePolicies(policies = []) {
+  return policies.filter((policy) => (
+    policy?.runtime === 'browser'
+    && ['mock', 'onnx'].includes(policy?.framework)
+  ));
+}
 
 function cloneArray(values, fallback = []) {
   if (!values) {
     return Array.from(fallback);
   }
   return Array.from(values);
+}
+
+function clonePhysicsOptions(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    return null;
+  }
+  return JSON.parse(JSON.stringify(options));
 }
 
 function resolveStaticAssetPath(configPath, assetPath) {
@@ -51,16 +84,35 @@ function makeTensor(name, value) {
   return new ort.Tensor('float32', data, [1, data.length]);
 }
 
-function makeDefaultStanceTarget({ policyJointNames, defaultJointPos, stiffness, damping }) {
-  return {
+function makeDefaultStanceTarget({
+  policyJointNames,
+  defaultJointPos,
+  resetJointPos,
+  resetRootTranslation,
+  stiffness,
+  damping,
+  torqueLimits,
+  controlDt,
+  physicsOptions
+}) {
+  const jointPositions = resetJointPos?.length ? resetJointPos : defaultJointPos;
+  const rootTranslation = resetRootTranslation?.length ? resetRootTranslation : [0, 0, 0.78];
+  const target = {
     mode: 'joint_position_target',
     joint_names: cloneArray(policyJointNames),
-    joint_positions: cloneArray(defaultJointPos).map((value) => Number(Number(value).toFixed(8))),
-    kp: cloneArray(stiffness).map((value) => Number(Number(value).toFixed(8))),
-    kd: cloneArray(damping).map((value) => Number(Number(value).toFixed(8))),
-    root_translation: [0, 0, 0.78],
-    root_rotation_wxyz: [1, 0, 0, 0]
+    joint_positions: cloneArray(jointPositions).map((value) => Number(Number(value).toFixed(6))),
+    kp: cloneArray(stiffness).map((value) => Number(Number(value).toFixed(6))),
+    kd: cloneArray(damping).map((value) => Number(Number(value).toFixed(6))),
+    torque_limits: cloneArray(torqueLimits).map((value) => Number(Number(value).toFixed(6))),
+    root_translation: cloneArray(rootTranslation, [0, 0, 0.78]).map((value) => Number(Number(value).toFixed(6))),
+    root_rotation_wxyz: [1, 0, 0, 0],
+    control_dt: Number.isFinite(Number(controlDt)) && Number(controlDt) > 0 ? Number(controlDt) : 0.02
   };
+  const physics = clonePhysicsOptions(physicsOptions);
+  if (physics) {
+    target.physics_options = physics;
+  }
+  return target;
 }
 
 async function loadPolicyConfig(configPath, { required = true } = {}) {
@@ -129,12 +181,17 @@ export function normalizeFrameCacheAsMotionClip(frameCache) {
 }
 
 export class MockPassthroughPolicy {
-  constructor(manifest = BROWSER_POLICY_MANIFESTS[0]) {
+  constructor(manifest = DEFAULT_BROWSER_POLICY_MANIFESTS[0]) {
     this.manifest = manifest;
     this.policyJointNames = [];
     this.defaultJointPos = [];
+    this.resetJointPos = [];
+    this.resetRootTranslation = [0, 0, 0.78];
     this.stiffness = [];
     this.damping = [];
+    this.torqueLimits = [];
+    this.controlDt = 0.02;
+    this.physicsOptions = null;
   }
 
   async load() {
@@ -143,8 +200,15 @@ export class MockPassthroughPolicy {
       ? config.policy_joint_names.slice()
       : [];
     this.defaultJointPos = cloneArray(config?.default_joint_pos).slice(0, this.policyJointNames.length);
+    this.resetJointPos = cloneArray(config?.reset_joint_pos, this.defaultJointPos).slice(0, this.policyJointNames.length);
+    this.resetRootTranslation = cloneArray(config?.reset_root_translation, [0, 0, 0.78]).slice(0, 3);
     this.stiffness = cloneArray(config?.stiffness).slice(0, this.policyJointNames.length);
     this.damping = cloneArray(config?.damping).slice(0, this.policyJointNames.length);
+    this.torqueLimits = cloneArray(config?.torque_limits).slice(0, this.policyJointNames.length);
+    this.controlDt = Number.isFinite(Number(config?.control_dt)) && Number(config.control_dt) > 0
+      ? Number(config.control_dt)
+      : 0.02;
+    this.physicsOptions = clonePhysicsOptions(config?.physics_options);
     return this;
   }
 
@@ -161,15 +225,22 @@ export class MockPassthroughPolicy {
   async step(input = {}) {
     const reference = input.reference ?? {};
     const state = reference.state ?? {};
-    return {
+    const output = {
       mode: 'joint_position_target',
       joint_names: cloneArray(reference.joint_names),
       joint_positions: cloneArray(state.joint_positions),
       kp: cloneArray(state.stiffness),
       kd: cloneArray(state.damping),
+      torque_limits: cloneArray(state.torque_limits),
       root_translation: cloneArray(state.root_translation, [0, 0, 0.78]),
-      root_rotation_wxyz: cloneArray(state.root_rotation_wxyz, [1, 0, 0, 0])
+      root_rotation_wxyz: cloneArray(state.root_rotation_wxyz, [1, 0, 0, 0]),
+      control_dt: this.controlDt
     };
+    const physics = clonePhysicsOptions(this.physicsOptions);
+    if (physics) {
+      output.physics_options = physics;
+    }
+    return output;
   }
 
   defaultStance() {
@@ -187,9 +258,14 @@ export class BrowserOnnxPolicy {
     this.numActions = 0;
     this.lastActions = new Float32Array();
     this.defaultJointPos = new Float32Array();
+    this.resetJointPos = new Float32Array();
+    this.resetRootTranslation = new Float32Array([0, 0, 0.78]);
     this.actionScale = new Float32Array();
     this.stiffness = new Float32Array();
     this.damping = new Float32Array();
+    this.torqueLimits = new Float32Array();
+    this.controlDt = 0.02;
+    this.physicsOptions = null;
     this.actionClip = 10;
     this.tracking = null;
     this.obsModules = [];
@@ -212,10 +288,19 @@ export class BrowserOnnxPolicy {
     }
     this.numActions = this.policyJointNames.length;
     this.defaultJointPos = toFloatArray(this.config.default_joint_pos, this.numActions, 0);
+    this.resetJointPos = toFloatArray(this.config.reset_joint_pos ?? this.config.default_joint_pos, this.numActions, 0);
+    this.resetRootTranslation = toFloatArray(this.config.reset_root_translation ?? [0, 0, 0.78], 3, 0);
     this.actionScale = toFloatArray(this.config.action_scale, this.numActions, 1);
     this.stiffness = toFloatArray(this.config.stiffness, this.numActions, 0);
     this.damping = toFloatArray(this.config.damping, this.numActions, 0);
+    this.torqueLimits = Array.isArray(this.config.torque_limits) || ArrayBuffer.isView(this.config.torque_limits)
+      ? toFloatArray(this.config.torque_limits, this.numActions, Number.POSITIVE_INFINITY)
+      : new Float32Array();
     this.actionClip = Number.isFinite(Number(this.config.action_clip)) ? Number(this.config.action_clip) : 10;
+    this.controlDt = Number.isFinite(Number(this.config.control_dt)) && Number(this.config.control_dt) > 0
+      ? Number(this.config.control_dt)
+      : 0.02;
+    this.physicsOptions = clonePhysicsOptions(this.config.physics_options);
     this.lastActions = new Float32Array(this.numActions);
     this.tracking = tracking ? new TrackingHelper(tracking) : null;
     this.obsModules = this._buildObsModules(this.config.obs_config);
@@ -376,20 +461,28 @@ export class BrowserOnnxPolicy {
       }
 
       const jointPositions = this.policyJointNames.map((_, index) => {
-        const raw = Math.max(-this.actionClip, Math.min(this.actionClip, Number(action[index] ?? 0)));
+        const raw = Number(action[index] ?? 0);
+        const clipped = Math.max(-this.actionClip, Math.min(this.actionClip, raw));
         this.lastActions[index] = raw;
-        return Number(this.defaultJointPos[index] ?? 0) + Number(this.actionScale[index] ?? 1) * raw;
+        return Number(this.defaultJointPos[index] ?? 0) + Number(this.actionScale[index] ?? 1) * clipped;
       });
 
-      return {
+      const output = {
         mode: 'joint_position_target',
         joint_names: cloneArray(this.policyJointNames),
         joint_positions: jointPositions,
         kp: cloneArray(this.stiffness),
         kd: cloneArray(this.damping),
+        torque_limits: cloneArray(this.torqueLimits),
         root_translation: cloneArray(referenceState.root_translation, [0, 0, 0.78]),
-        root_rotation_wxyz: cloneArray(referenceState.root_rotation_wxyz, [1, 0, 0, 0])
+        root_rotation_wxyz: cloneArray(referenceState.root_rotation_wxyz, [1, 0, 0, 0]),
+        control_dt: this.controlDt
       };
+      const physics = clonePhysicsOptions(this.physicsOptions);
+      if (physics) {
+        output.physics_options = physics;
+      }
+      return output;
     } finally {
       this.isInferencing = false;
     }
@@ -489,6 +582,10 @@ export class BrowserPolicyRuntime {
       active_policy_id: this.activePolicyId,
       last_policy_result: this.lastOutput ? summarizeOutput(this.lastOutput) : null
     };
+  }
+
+  trackingState() {
+    return this.activePolicy?.tracking?.playbackState?.() ?? null;
   }
 }
 

@@ -63,7 +63,7 @@ class SessionController:
         self._last_policy_result: dict[str, Any] = {}
         self._last_policy_step_time: float | None = None
         self._policy_started_by_physics = False
-        self._policy_step_interval = 1.0 / 30.0
+        self._policy_step_interval = 1.0 / 50.0
         self._physics_enabled = False
         self._reference_state: CanonicalRobotState | None = None
         self._simulated_state: CanonicalRobotState | None = None
@@ -92,21 +92,26 @@ class SessionController:
             self._last_error = None
             return list(self._items)
 
-    def list_browser(self, path_str: str) -> tuple[str, list[BrowserNode]]:
-        root, nodes = list_browser_nodes(path_str)
+    def list_browser(self, path_str: str) -> tuple[str, str | None, list[BrowserNode]]:
+        root, parent, nodes = list_browser_nodes(path_str)
         with self._lock:
             self._catalog_root = root
             self._items = []
             self._last_error = None
-        return root, nodes
+        return root, parent, nodes
 
     def load_clip(self, path_str: str, format_hint: str | None = None) -> StateSequence:
         sequence = load_sequence(path_str, format_hint)
         active_item_path = str(Path(path_str).expanduser().resolve())
         with self._lock:
+            was_physics_enabled = self._physics_enabled
             stopped_manual_policy = self._active_policy_id is not None and not self._policy_started_by_physics
-            self._stop_policy_locked()
-            self._clear_physics_state_locked(disable_physics=True, needs_reset=False)
+            if stopped_manual_policy or not was_physics_enabled:
+                self._stop_policy_locked()
+            self._clear_physics_state_locked(
+                disable_physics=not was_physics_enabled,
+                needs_reset=was_physics_enabled,
+            )
             self._reset_viewer_test_state_locked()
             self._sequences[sequence.sequence_id] = sequence
             self._active_sequence_id = sequence.sequence_id
@@ -114,12 +119,18 @@ class SessionController:
             self._current_frame = 0
             self._trim_start = 0
             self._trim_end = max(0, sequence.frame_count - 1)
-            self._playback_state = "stopped"
+            self._playback_state = "paused" if was_physics_enabled else "stopped"
             self._last_playback_time = None
             self._frame_accumulator = 0.0
             self._last_error = None
             if stopped_manual_policy:
                 self._push_log_locked("policy stopped")
+            if was_physics_enabled and self._active_policy_id is None:
+                self.start_policy(
+                    "mock_g1_policy",
+                    _emit_lifecycle_log=False,
+                    _started_by_physics_toggle=True,
+                )
             return sequence
 
     def get_sequence(self, sequence_id: str) -> StateSequence:
@@ -130,6 +141,9 @@ class SessionController:
 
     def list_policies(self):
         return self._policy_manager.list_policies()
+
+    def policy_config(self, policy_id: str) -> dict[str, Any]:
+        return self._policy_registry.policy_config(policy_id)
 
     def play(self, now: float | None = None) -> SessionSummary:
         with self._lock:

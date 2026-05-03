@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import EXPORT_ROOT
-from .models import StateSequence
+from .models import ExportMotionFormat, StateSequence, Twist2ExportExtension
 
 
 def _sanitize_name(name: str) -> str:
@@ -57,20 +57,39 @@ def export_trimmed_sequence(
     start_frame: int,
     end_frame: int,
     export_root: Path | None = None,
+    export_format: ExportMotionFormat | None = None,
+    twist2_extension: Twist2ExportExtension | None = None,
+    use_format_subdir: bool | None = None,
 ) -> Path:
     trimmed = trim_sequence(sequence, start_frame, end_frame)
     export_root = export_root or EXPORT_ROOT
     export_root.mkdir(parents=True, exist_ok=True)
 
-    if trimmed.source_format == "sonic":
-        return _export_sonic(trimmed, export_root)
-    if trimmed.source_format == "twist2":
-        return _export_twist2(trimmed, export_root)
-    raise ValueError(f"Unsupported export format: {trimmed.source_format}")
+    target_format = export_format or _default_export_format(trimmed)
+    if use_format_subdir is None:
+        use_format_subdir = export_root == EXPORT_ROOT
+
+    if target_format == "sonic":
+        return _export_sonic(trimmed, export_root, use_format_subdir=use_format_subdir)
+    if target_format == "twist2":
+        return _export_twist2(
+            trimmed,
+            export_root,
+            suffix=twist2_extension,
+            use_format_subdir=use_format_subdir,
+        )
+    raise ValueError(f"Unsupported export format: {target_format}")
 
 
-def _export_sonic(sequence: StateSequence, export_root: Path) -> Path:
-    target_dir = export_root / "sonic" / _sanitize_name(sequence.name)
+def _default_export_format(sequence: StateSequence) -> ExportMotionFormat:
+    if sequence.source_format in {"sonic", "twist2"}:
+        return sequence.source_format
+    raise ValueError(f"Unsupported export format: {sequence.source_format}")
+
+
+def _export_sonic(sequence: StateSequence, export_root: Path, *, use_format_subdir: bool = True) -> Path:
+    base_dir = export_root / "sonic" if use_format_subdir else export_root
+    target_dir = base_dir / _sanitize_name(sequence.name)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     joint_pos = np.asarray([frame.joint_positions for frame in sequence.frames], dtype=float)
@@ -124,10 +143,16 @@ def _export_sonic(sequence: StateSequence, export_root: Path) -> Path:
     return target_dir
 
 
-def _export_twist2(sequence: StateSequence, export_root: Path) -> Path:
+def _export_twist2(
+    sequence: StateSequence,
+    export_root: Path,
+    *,
+    suffix: Twist2ExportExtension | None = None,
+    use_format_subdir: bool = True,
+) -> Path:
     source_path = Path(sequence.source_path)
-    suffix = source_path.suffix.lower() if source_path.suffix else ".pkl"
-    target_dir = export_root / "twist2"
+    suffix = suffix or (source_path.suffix.lower() if source_path.suffix else ".pkl")
+    target_dir = export_root / "twist2" if use_format_subdir else export_root
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{_sanitize_name(sequence.name)}{suffix if suffix in {'.pkl', '.npz', '.json'} else '.pkl'}"
 

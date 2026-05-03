@@ -1,0 +1,34 @@
+{
+  "format_id": "motion_tracking",
+  "display_name": "Motion Tracking",
+  "display_name_i18n": {
+    "zh": "运动追踪",
+    "en": "Motion Tracking"
+  },
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "onnx",
+  "control_mode": "joint_position_target",
+  "config_template": "tracking_policy_latest.json",
+  "policy_id_prefix": "motion_tracking",
+  "tags": [
+    "onnx",
+    "browser",
+    "tracking"
+  ],
+  "description": "Browser ONNX Runtime Web policy loader compatible with humanoid-policy-viewer checkpoints.",
+  "description_i18n": {
+    "zh": "浏览器 ONNX Runtime Web 运动追踪策略，兼容 humanoid-policy-viewer 检查点。",
+    "en": "Browser ONNX Runtime Web motion tracking policy compatible with humanoid-policy-viewer checkpoints."
+  },
+  "model_overrides": {
+    "policy_latest.onnx": {
+      "policy_id": "motion_tracking",
+      "display_name": "Motion Tracking",
+      "display_name_i18n": {
+        "zh": "运动追踪",
+        "en": "Motion Tracking"
+      }
+    }
+  }
+}

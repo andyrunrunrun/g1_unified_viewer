@@ -1,0 +1,25 @@
+{
+  "format_id": "twist2",
+  "display_name": "Twist2",
+  "display_name_i18n": {
+    "zh": "Twist2",
+    "en": "Twist2"
+  },
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "onnx",
+  "control_mode": "joint_position_target",
+  "config_template": "tracking_policy_latest.json",
+  "policy_id_prefix": "twist2",
+  "tags": [
+    "onnx",
+    "browser",
+    "twist2",
+    "tracking"
+  ],
+  "description": "Browser ONNX Runtime Web policy loader for Twist2-exported G1 tracking checkpoints.",
+  "description_i18n": {
+    "zh": "浏览器 ONNX Runtime Web 加载 Twist2 导出的 G1 追踪策略。",
+    "en": "Browser ONNX Runtime Web policy loader for Twist2-exported G1 tracking checkpoints."
+  }
+}

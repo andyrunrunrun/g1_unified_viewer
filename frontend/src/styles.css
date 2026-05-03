@@ -34,7 +34,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -55,7 +56,8 @@ button:hover {
 }
 
 button:disabled,
-input:disabled {
+input:disabled,
+select:disabled {
   cursor: not-allowed;
   opacity: 0.52;
   transform: none;
@@ -72,7 +74,8 @@ button.ghost {
   background: transparent;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 36px;
   border: 1px solid var(--line);
@@ -82,7 +85,8 @@ input {
   background: #0f151a;
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: 2px solid rgba(98, 168, 200, 0.28);
   border-color: var(--accent-2);
 }
@@ -107,6 +111,13 @@ input[type="range"] {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #171d22;
+}
+
+.topbar-controls {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
 }
 
 .topbar h1,
@@ -152,7 +163,12 @@ input[type="range"] {
   align-content: start;
 }
 
+.sidebar {
+  overflow: hidden;
+}
+
 .panel {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 12px;
@@ -160,6 +176,10 @@ input[type="range"] {
 }
 
 .panel-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
   margin-bottom: 11px;
 }
 
@@ -171,6 +191,7 @@ input[type="range"] {
 .stat-grid,
 .two-col,
 .three-col,
+.export-grid,
 .impulse-grid {
   display: grid;
   gap: 8px;
@@ -178,6 +199,7 @@ input[type="range"] {
 
 .status-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
 }
 
 .two-col {
@@ -188,8 +210,24 @@ input[type="range"] {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.export-grid {
+  grid-template-columns: 1fr 0.78fr;
+}
+
 .impulse-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.field span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .test-actions {
@@ -215,6 +253,7 @@ input[type="range"] {
 .note,
 .stat,
 .tree-node,
+.policy-folder,
 .policy-card {
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -247,10 +286,14 @@ input[type="range"] {
 .status,
 .note {
   margin-top: 8px;
-  padding: 8px 9px;
+  padding: 6px 8px;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.status {
+  overflow-wrap: anywhere;
 }
 
 .status.error {
@@ -280,12 +323,73 @@ input[type="range"] {
 .tree,
 .policy-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   max-height: 260px;
-  overflow: auto;
+  overflow-y: auto;
+}
+
+.policy-group-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.policy-browser {
+  display: grid;
+  gap: 8px;
+}
+
+.language-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 34px);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11181e;
+}
+
+.language-toggle button {
+  min-height: 24px;
+  padding: 2px 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 10px;
+}
+
+.language-toggle button.active {
+  color: var(--ink);
+  border-color: rgba(112, 168, 198, 0.55);
+  background: rgba(112, 168, 198, 0.16);
+}
+
+.tree {
+  overflow-x: hidden;
+}
+
+.browser-actions {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.32fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.path-chip {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 8px;
+  color: var(--muted);
+  background: #11181e;
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tree-node,
+.policy-folder,
 .policy-card {
   width: 100%;
   color: var(--ink);
@@ -293,14 +397,129 @@ input[type="range"] {
   background: #1c252d;
 }
 
+.tree-node {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 31px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  padding-left: calc(10px + var(--tree-depth, 0) * 14px);
+  overflow: hidden;
+}
+
+.tree-icon,
+.tree-format {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.tree-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.tree-label,
+.tree-parent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-label {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tree-parent {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
 .tree-node.directory {
   color: var(--accent-2);
 }
 
+.tree-node.directory .tree-label {
+  color: var(--accent-2);
+}
+
 .tree-node.active,
+.policy-folder.active,
 .policy-card.active {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px rgba(88, 192, 141, 0.42);
+}
+
+.policy-folder {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 40px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.policy-folder.mock {
+  grid-column: 1 / -1;
+}
+
+.folder-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--accent-2);
+  background: rgba(112, 168, 198, 0.1);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.folder-text {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.folder-text strong,
+.folder-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-text strong {
+  font-size: 12px;
+}
+
+.folder-text small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.folder-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
 }
 
 .policy-card {
@@ -467,8 +686,15 @@ pre {
 
   .two-col,
   .three-col,
-  .impulse-grid {
+  .export-grid,
+  .impulse-grid,
+  .policy-group-list,
+  .panel-title {
     grid-template-columns: 1fr;
+  }
+
+  .language-toggle {
+    justify-self: start;
   }
 
   .topbar h1 {

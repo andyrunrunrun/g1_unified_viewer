@@ -20,3 +20,16 @@ test('viewer stage is visually owned by the MuJoCo render instead of a CSS overl
   assert.match(styles, /\.layout\s*\{[\s\S]*align-items:\s*start/);
   assert.match(styles, /\.viewer-frame\s*\{[\s\S]*background:\s*#17283a/);
 });
+
+test('motion tree cannot grow beyond the left panel when relative paths are long', () => {
+  assert.match(styles, /\.sidebar\s*\{[\s\S]*overflow:\s*hidden/);
+  assert.match(styles, /\.panel\s*\{[\s\S]*min-width:\s*0/);
+  assert.match(styles, /\.status,\s*\.note\s*\{[\s\S]*font-size:\s*11px/);
+  assert.match(styles, /\.status\s*\{[\s\S]*overflow-wrap:\s*anywhere/);
+  assert.match(styles, /\.tree\s*\{[\s\S]*overflow-x:\s*hidden/);
+  assert.match(styles, /\.tree-node\s*\{[\s\S]*min-width:\s*0/);
+  assert.match(styles, /\.tree-text\s*\{[\s\S]*min-width:\s*0/);
+  assert.match(styles, /\.tree-label,\s*\.tree-parent\s*\{[\s\S]*text-overflow:\s*ellipsis/);
+  assert.match(styles, /\.tree-label\s*\{[\s\S]*font-size:\s*12px/);
+  assert.match(styles, /\.tree-parent\s*\{[\s\S]*font-size:\s*9px/);
+});

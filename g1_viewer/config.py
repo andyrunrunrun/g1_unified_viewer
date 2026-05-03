@@ -5,7 +5,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EXPORT_ROOT = PROJECT_ROOT / "exports"
-MANIFEST_DIR = PROJECT_ROOT / "policy_manifests"
+POLICY_PLUGIN_DIR = PROJECT_ROOT / "policy_plugins"
+MANIFEST_DIR = POLICY_PLUGIN_DIR
 ASSET_ROOT = PROJECT_ROOT / "assets"
 
 CANONICAL_G1_JOINT_NAMES_29 = [

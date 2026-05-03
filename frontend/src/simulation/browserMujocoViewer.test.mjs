@@ -14,6 +14,7 @@ import {
 } from './browserMujocoViewer.js';
 
 const viewerSource = readFileSync(new URL('./browserMujocoViewer.js', import.meta.url), 'utf-8');
+const g1SceneSource = readFileSync(new URL('../../public/examples/scenes/g1/g1.xml', import.meta.url), 'utf-8');
 
 function assertClose(actual, expected) {
   assert.ok(Math.abs(actual - expected) < 0.0001, `${actual} should be close to ${expected}`);
@@ -228,6 +229,110 @@ test('physics decimation follows MuJoCo timestep like humanoid-policy-viewer', (
   viewer.model = { opt: { timestep: 0.005 } };
 
   assert.equal(viewer.getPhysicsDecimation(), 4);
+  assert.equal(viewer.getPhysicsDecimation(0.01), 2);
+});
+
+test('G1 MuJoCo scene keeps policy-neutral timestep, solver, friction, and armatures', () => {
+  const expectedArmatures = [
+    ['left_hip_pitch_joint', '0.0103'],
+    ['left_hip_roll_joint', '0.0251'],
+    ['left_hip_yaw_joint', '0.0103'],
+    ['left_knee_joint', '0.0251'],
+    ['left_ankle_pitch_joint', '0.003597'],
+    ['left_ankle_roll_joint', '0.003597'],
+    ['right_hip_pitch_joint', '0.0103'],
+    ['right_hip_roll_joint', '0.0251'],
+    ['right_hip_yaw_joint', '0.0103'],
+    ['right_knee_joint', '0.0251'],
+    ['right_ankle_pitch_joint', '0.003597'],
+    ['right_ankle_roll_joint', '0.003597'],
+    ['waist_yaw_joint', '0.0103'],
+    ['waist_roll_joint', '0.0103'],
+    ['waist_pitch_joint', '0.0103'],
+    ['left_shoulder_pitch_joint', '0.003597'],
+    ['left_shoulder_roll_joint', '0.003597'],
+    ['left_shoulder_yaw_joint', '0.003597'],
+    ['left_elbow_joint', '0.003597'],
+    ['left_wrist_roll_joint', '0.003597'],
+    ['left_wrist_pitch_joint', '0.00425'],
+    ['left_wrist_yaw_joint', '0.00425'],
+    ['right_shoulder_pitch_joint', '0.003597'],
+    ['right_shoulder_roll_joint', '0.003597'],
+    ['right_shoulder_yaw_joint', '0.003597'],
+    ['right_elbow_joint', '0.003597'],
+    ['right_wrist_roll_joint', '0.003597'],
+    ['right_wrist_pitch_joint', '0.00425'],
+    ['right_wrist_yaw_joint', '0.00425']
+  ];
+
+  assert.match(g1SceneSource, /<option timestep="0\.002" solver="Newton"\/>/);
+  assert.match(g1SceneSource, /<geom name="floor"[^>]*friction="1\.0 \.1 \.1"/);
+  for (const [jointName, armature] of expectedArmatures) {
+    assert.match(
+      g1SceneSource,
+      new RegExp(`<joint name="${jointName}"[^>]*armature="${armature}"`)
+    );
+  }
+});
+
+test('viewer applies and resets per-policy MuJoCo physics options', () => {
+  const viewer = Object.create(BrowserMujocoViewer.prototype);
+  viewer.mujoco = {
+    mjtSolver: {
+      mjSOL_PGS: { value: 0 },
+      mjSOL_CG: { value: 1 },
+      mjSOL_NEWTON: { value: 2 }
+    }
+  };
+  viewer.model = {
+    opt: { timestep: 0.002, solver: 2 },
+    geom_friction: new Float64Array([
+      1.0, 0.1, 0.1,
+      0.7, 0.2, 0.2
+    ])
+  };
+  viewer.geomIdByName = new Map([['floor', 0], ['other', 1]]);
+  viewer.defaultPhysicsOptions = {
+    timestep: 0.002,
+    solver: 2,
+    geom_friction: {
+      floor: [1.0, 0.1, 0.1]
+    }
+  };
+
+  viewer.configurePhysics({
+    timestep: 0.001,
+    solver: 'PGS',
+    geom_friction: {
+      floor: [1.6, 0.005, 0.0001]
+    }
+  });
+
+  assert.equal(viewer.model.opt.timestep, 0.001);
+  assert.equal(viewer.model.opt.solver, 0);
+  assert.deepEqual([...viewer.model.geom_friction.slice(0, 3)], [1.6, 0.005, 0.0001]);
+
+  viewer.configurePhysics(null);
+
+  assert.equal(viewer.model.opt.timestep, 0.002);
+  assert.equal(viewer.model.opt.solver, 2);
+  assert.deepEqual([...viewer.model.geom_friction.slice(0, 3)], [1.0, 0.1, 0.1]);
+});
+
+test('readState includes freejoint root velocities for browser policy proprioception', () => {
+  const viewer = Object.create(BrowserMujocoViewer.prototype);
+  viewer.simulation = {
+    qpos: new Float64Array([1, 2, 0.8, 1, 0, 0, 0, 0.1]),
+    qvel: new Float64Array([0.4, 0.5, 0.6, 0.01, 0.02, 0.03, 0.7])
+  };
+  viewer.jointNamesMJC = ['joint_a'];
+  viewer.jointAddressByName = new Map([['joint_a', 7]]);
+  viewer.jointVelocityAddressByName = new Map([['joint_a', 6]]);
+
+  const state = viewer.readState(['joint_a']);
+
+  assert.deepEqual(state.root_linear_velocity, [0.4, 0.5, 0.6]);
+  assert.deepEqual(state.root_angular_velocity, [0.01, 0.02, 0.03]);
 });
 
 test('stepPhysics writes controls through MuJoCo actuator-to-joint mapping instead of policy order', () => {
@@ -272,6 +377,48 @@ test('stepPhysics writes controls through MuJoCo actuator-to-joint mapping inste
   });
 
   assert.deepEqual([...viewer.simulation.ctrl], [1, 3, 2]);
+});
+
+test('stepPhysics clamps policy torques to TWIST2 torque safety limits before actuator ranges', () => {
+  const viewer = Object.create(BrowserMujocoViewer.prototype);
+  viewer.model = {
+    nu: 2,
+    nq: 9,
+    nv: 8,
+    actuator_ctrlrange: new Float64Array([-100, 100, -20, 20])
+  };
+  viewer.simulation = {
+    qpos: new Float64Array([0, 0, 0.8, 1, 0, 0, 0, 0, 0]),
+    qvel: new Float64Array(8),
+    ctrl: new Float64Array(2),
+    qfrc_applied: new Float64Array(8),
+    forward() {},
+    step() {}
+  };
+  viewer.jointAddressByName = new Map([
+    ['hip', 7],
+    ['ankle', 8]
+  ]);
+  viewer.jointVelocityAddressByName = new Map([
+    ['hip', 6],
+    ['ankle', 7]
+  ]);
+  viewer.actuatorAddressByJointName = new Map([
+    ['hip', 0],
+    ['ankle', 1]
+  ]);
+  viewer.syncBodies = () => {};
+  viewer.requestRender = () => {};
+
+  viewer.stepPhysics({
+    joint_names: ['hip', 'ankle'],
+    joint_positions: [1, 1],
+    kp: [100, 100],
+    kd: [0, 0],
+    torque_limits: [45, 45]
+  });
+
+  assert.deepEqual([...viewer.simulation.ctrl], [45, 20]);
 });
 
 test('stepPhysics falls under gravity when no policy target is provided', () => {

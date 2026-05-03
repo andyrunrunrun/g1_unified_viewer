@@ -172,6 +172,49 @@ function decodeNames(model, addressArray, count) {
   return names;
 }
 
+function readGeomFriction(model, geomId) {
+  const friction = model?.geom_friction;
+  const offset = Number(geomId) * 3;
+  if (!friction || offset + 2 >= friction.length) {
+    return [];
+  }
+  return [
+    Number(friction[offset] ?? 0),
+    Number(friction[offset + 1] ?? 0),
+    Number(friction[offset + 2] ?? 0)
+  ];
+}
+
+function clonePhysicsOptions(options = {}) {
+  return JSON.parse(JSON.stringify(options || {}));
+}
+
+function mergePhysicsOptions(defaults, overrides) {
+  const base = clonePhysicsOptions(defaults);
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+    return base;
+  }
+  const merged = { ...base, ...clonePhysicsOptions(overrides) };
+  merged.geom_friction = {
+    ...(base.geom_friction || {}),
+    ...(overrides.geom_friction || {})
+  };
+  return merged;
+}
+
+function resolveSolverValue(mujoco, solver) {
+  if (Number.isFinite(Number(solver))) {
+    return Number(solver);
+  }
+  const key = String(solver || '').trim().toUpperCase();
+  const solverMap = {
+    PGS: mujoco?.mjtSolver?.mjSOL_PGS?.value,
+    CG: mujoco?.mjtSolver?.mjSOL_CG?.value,
+    NEWTON: mujoco?.mjtSolver?.mjSOL_NEWTON?.value
+  };
+  return Number.isFinite(Number(solverMap[key])) ? Number(solverMap[key]) : null;
+}
+
 function makeGeometry(mujoco, model, geomId, meshes) {
   const type = model.geom_type[geomId];
   const size = [
@@ -259,6 +302,14 @@ function clampControl(model, actuatorIndex, value) {
     return value;
   }
   return Math.min(Math.max(value, min), max);
+}
+
+function clampSymmetricLimit(value, limit) {
+  const max = Number(limit);
+  if (!Number.isFinite(max) || max <= 0) {
+    return value;
+  }
+  return Math.min(Math.max(value, -max), max);
 }
 
 function zeroArray(values) {
@@ -467,6 +518,9 @@ export class BrowserMujocoViewer {
     this.jointAddressByName = new Map();
     this.jointVelocityAddressByName = new Map();
     this.actuatorAddressByJointName = new Map();
+    this.geomIdByName = new Map();
+    this.defaultPhysicsOptions = null;
+    this.currentPhysicsOptionsSignature = '';
     this.lastFrameKey = null;
     this.followEnabled = true;
     this.followHeight = 0.75;
@@ -518,6 +572,8 @@ export class BrowserMujocoViewer {
     const loaded = await loadScene(this.mujoco, sceneManifest.scene_path, this);
     Object.assign(this, loaded);
     this.bodyIdByName = new Map(this.bodyNames.map((name, index) => [name, index]));
+    this.geomNamesMJC = decodeNames(this.model, this.model.name_geomadr, this.model.ngeom);
+    this.geomIdByName = new Map(this.geomNamesMJC.map((name, index) => [name, index]));
     this.followBodyId = this.bodyIdByName.get('pelvis') ?? this.bodyIdByName.get('base') ?? (this.model.nbody > 1 ? 1 : 0);
     this.followInitialized = false;
     this.highDetailBodies = Object.entries(this.bodies)
@@ -531,6 +587,7 @@ export class BrowserMujocoViewer {
       this.jointNamesMJC.map((name, index) => [name, this.model.jnt_dofadr[index]])
     );
     this.actuatorAddressByJointName = buildActuatorAddressByJointName(this.model, this.mujoco, this.jointNamesMJC);
+    this.defaultPhysicsOptions = this.capturePhysicsOptions();
     this.applyDefaultPose();
     this.requestRender();
     this.statusCallback('Browser MuJoCo viewer ready');
@@ -543,6 +600,60 @@ export class BrowserMujocoViewer {
     this.simulation.forward();
     this.syncBodies();
     this.requestRender();
+  }
+
+  capturePhysicsOptions() {
+    const geomFriction = {};
+    for (const name of ['floor']) {
+      const geomId = this.geomIdByName?.get(name);
+      if (geomId !== undefined) {
+        geomFriction[name] = readGeomFriction(this.model, geomId);
+      }
+    }
+    return {
+      timestep: Number(this.model?.opt?.timestep ?? 0.002),
+      solver: Number(this.model?.opt?.solver ?? 2),
+      geom_friction: geomFriction
+    };
+  }
+
+  configurePhysics(options = null) {
+    if (!this.model) {
+      return;
+    }
+    if (!this.defaultPhysicsOptions) {
+      this.defaultPhysicsOptions = this.capturePhysicsOptions();
+    }
+    const physicsOptions = mergePhysicsOptions(this.defaultPhysicsOptions, options);
+    const signature = JSON.stringify(physicsOptions);
+    if (signature === this.currentPhysicsOptionsSignature) {
+      return;
+    }
+    this.currentPhysicsOptionsSignature = signature;
+
+    const timestep = Number(physicsOptions.timestep);
+    if (Number.isFinite(timestep) && timestep > 0 && this.model.opt) {
+      this.model.opt.timestep = timestep;
+    }
+
+    const solver = resolveSolverValue(this.mujoco, physicsOptions.solver);
+    if (solver !== null && this.model.opt) {
+      this.model.opt.solver = solver;
+    }
+
+    for (const [name, values] of Object.entries(physicsOptions.geom_friction || {})) {
+      const geomId = this.geomIdByName?.get(name);
+      if (geomId === undefined || !this.model.geom_friction) {
+        continue;
+      }
+      const offset = geomId * 3;
+      for (let axis = 0; axis < 3; axis += 1) {
+        const value = Number(values?.[axis]);
+        if (Number.isFinite(value) && offset + axis < this.model.geom_friction.length) {
+          this.model.geom_friction[offset + axis] = value;
+        }
+      }
+    }
   }
 
   applyState(payload) {
@@ -610,11 +721,13 @@ export class BrowserMujocoViewer {
     if (!this.simulation || !this.model) {
       return null;
     }
+    this.configurePhysics(options.physics_options);
     const steps = Math.max(1, Math.floor(options.steps ?? 1));
     const jointNames = options.joint_names || [];
     const targets = options.joint_positions || [];
     const kp = options.kp || [];
     const kd = options.kd || [];
+    const torqueLimits = options.torque_limits || [];
     const now = Number(options.now ?? performance.now());
 
     for (let step = 0; step < steps; step += 1) {
@@ -639,7 +752,11 @@ export class BrowserMujocoViewer {
         const damping = Number(kd[index] ?? options.defaultKd ?? 1.5);
         const torque = stiffness * (Number(targets[index] ?? 0) - this.simulation.qpos[qposAddress])
           - damping * this.simulation.qvel[qvelAddress];
-        this.simulation.ctrl[ctrlAddress] = clampControl(this.model, ctrlAddress, torque);
+        this.simulation.ctrl[ctrlAddress] = clampControl(
+          this.model,
+          ctrlAddress,
+          clampSymmetricLimit(torque, torqueLimits[index])
+        );
       }
 
       this.simulation.step();
@@ -678,6 +795,8 @@ export class BrowserMujocoViewer {
       timestamp: performance.now() / 1000,
       root_translation: [Number(qpos[0] ?? 0), Number(qpos[1] ?? 0), Number(qpos[2] ?? 0.78)],
       root_rotation_wxyz: [Number(qpos[3] ?? 1), Number(qpos[4] ?? 0), Number(qpos[5] ?? 0), Number(qpos[6] ?? 0)],
+      root_linear_velocity: [Number(qvel[0] ?? 0), Number(qvel[1] ?? 0), Number(qvel[2] ?? 0)],
+      root_angular_velocity: [Number(qvel[3] ?? 0), Number(qvel[4] ?? 0), Number(qvel[5] ?? 0)],
       joint_positions: jointPositions,
       joint_velocities: jointVelocities
     };

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, root_validator
 
 SourceType = Literal["dataset", "policy"]
 MotionFormat = Literal["sonic", "twist2", "policy"]
+ExportMotionFormat = Literal["sonic", "twist2"]
+Twist2ExportExtension = Literal[".pkl", ".npz", ".json"]
 PlaybackState = Literal["empty", "stopped", "paused", "playing"]
 ViewMode = Literal["dataset", "policy"]
 CommandMode = Literal[
@@ -96,6 +98,8 @@ class BrowserNode(BaseModel):
     node_type: Literal["directory", "motion"]
     format: MotionFormat | None = None
     has_children: bool = False
+    relative_path: str | None = None
+    children: list["BrowserNode"] = Field(default_factory=list)
 
 
 class BrowserListRequest(BaseModel):
@@ -104,6 +108,7 @@ class BrowserListRequest(BaseModel):
 
 class BrowserListResponse(BaseModel):
     root: str
+    parent: str | None = None
     nodes: list[BrowserNode]
 
 
@@ -182,11 +187,14 @@ class TrimExportRequest(BaseModel):
     sequence_id: str
     start_frame: int
     end_frame: int
+    export_format: ExportMotionFormat | None = None
+    output_dir: str | None = None
+    twist2_extension: Twist2ExportExtension | None = None
 
 
 class TrimExportResponse(BaseModel):
     output_path: str
-    export_format: MotionFormat
+    export_format: ExportMotionFormat
     frame_count: int
 
 
@@ -206,13 +214,22 @@ class PolicyManifest(BaseModel):
     policy_id: str
     display_name: str
     robot_type: str
-    env_python: str
-    entrypoint: str
+    runtime: Literal["browser", "python_subprocess"] = "python_subprocess"
+    framework: Literal["mock", "onnx", "python"] | str | None = None
+    env_python: str = "__CURRENT_PYTHON__"
+    entrypoint: str | None = None
     weights_path: str | None = None
+    config_path: str | None = None
     control_mode: CommandMode = "joint_position_target"
     tags: list[str] = Field(default_factory=list)
     description: str = ""
+    display_name_i18n: dict[str, str] = Field(default_factory=dict)
+    description_i18n: dict[str, str] = Field(default_factory=dict)
     manifest_path: str | None = None
+    plugin_path: str | None = None
+    format_id: str | None = None
+    model_file: str | None = None
+    config_template: str | None = None
 
 
 class PolicyOperationResponse(BaseModel):

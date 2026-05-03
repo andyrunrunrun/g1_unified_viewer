@@ -102,6 +102,24 @@ export class TrackingHelper {
     return this.refLen > 0;
   }
 
+  playbackState() {
+    const clampedIdx = Math.max(0, Math.min(this.refIdx, Math.max(this.refLen - 1, 0)));
+    const transitionLen = this.transitionLen ?? 0;
+    const motionLen = this.motionLen ?? 0;
+    const inTransition = transitionLen > 0 && clampedIdx < transitionLen;
+    return {
+      available: this.refLen > 0,
+      currentName: this.currentName,
+      currentDone: this.currentDone,
+      refIdx: clampedIdx,
+      refLen: this.refLen,
+      transitionLen,
+      motionLen,
+      inTransition,
+      isDefault: this.currentName === 'default'
+    };
+  }
+
   reset(state = null) {
     this.currentDone = true;
     this.refIdx = 0;
@@ -186,8 +204,9 @@ export class TrackingHelper {
     return { jointPos, rootPos, rootQuat };
   }
 
-  _buildTransition(current, firstFrame) {
-    const steps = Math.max(0, Math.floor(this.transitionSteps));
+  _buildTransition(current, firstFrame, stepsOverride = null) {
+    const rawSteps = stepsOverride ?? this.transitionSteps;
+    const steps = Math.max(0, Math.floor(rawSteps));
     if (steps === 0) {
       return { jointPos: [], rootQuat: [], rootPos: [] };
     }
@@ -202,7 +221,7 @@ export class TrackingHelper {
     const current = this._readCurrentState(state);
     const motion = this._sliceMotionFromFrame(this.motions[name], options.startFrame);
     const aligned = this._alignMotionToCurrent(motion, current);
-    const transition = this._buildTransition(current, aligned);
+    const transition = this._buildTransition(current, aligned, options.transitionSteps);
     this.refJointPos = [...transition.jointPos, ...aligned.jointPos];
     this.refRootQuat = [...transition.rootQuat, ...aligned.rootQuat];
     this.refRootPos = [...transition.rootPos, ...aligned.rootPos];

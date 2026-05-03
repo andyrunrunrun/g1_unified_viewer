@@ -19,6 +19,7 @@ from g1_viewer.models import (
     ViewerImpulseRequest,
     ViewerInteractionSummary,
 )
+from g1_viewer.policies import PolicyRegistry, _resolve_runner_path, _slugify
 from g1_viewer.session import SessionController
 
 
@@ -27,12 +28,199 @@ SONIC_SAMPLE = REPO_ROOT / "examples" / "sample_data" / "sonic_demo"
 TWIST2_SAMPLE = REPO_ROOT / "examples" / "sample_data" / "twist2_demo.pkl"
 
 
+def _twist2_policy_id_for_model(model_path: Path) -> str:
+    model_stem = _slugify(model_path.stem)
+    return model_stem if model_stem.startswith("twist2_") else f"twist2_{model_stem}"
+
+
+class PolicyPluginRegistryTest(unittest.TestCase):
+    def test_discovers_policy_json_inside_policy_plugin_folders(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            plugin_dir = Path(temp_dir) / "demo_browser_policy"
+            plugin_dir.mkdir()
+            manifest_path = plugin_dir / "policy.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "policy_id": "demo_browser_policy",
+                        "display_name": "Demo Browser Policy",
+                        "robot_type": "g1",
+                        "runtime": "browser",
+                        "framework": "onnx",
+                        "config_path": "/examples/checkpoints/g1/tracking_policy_latest.json",
+                        "control_mode": "joint_position_target",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            policies = PolicyRegistry(Path(temp_dir)).discover()
+
+            self.assertEqual([policy.policy_id for policy in policies], ["demo_browser_policy"])
+            self.assertEqual(policies[0].runtime, "browser")
+            self.assertEqual(policies[0].framework, "onnx")
+            self.assertEqual(policies[0].manifest_path, str(manifest_path))
+            self.assertEqual(policies[0].plugin_path, str(plugin_dir))
+
+    def test_relative_python_entrypoint_resolves_from_plugin_folder(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            plugin_dir = Path(temp_dir) / "demo_python_policy"
+            plugin_dir.mkdir()
+            runner_path = plugin_dir / "runner.py"
+            runner_path.write_text("print('runner')\n", encoding="utf-8")
+            (plugin_dir / "policy.json").write_text(
+                json.dumps(
+                    {
+                        "policy_id": "demo_python_policy",
+                        "display_name": "Demo Python Policy",
+                        "robot_type": "g1",
+                        "runtime": "python_subprocess",
+                        "framework": "python",
+                        "env_python": "__CURRENT_PYTHON__",
+                        "entrypoint": "runner.py",
+                        "control_mode": "joint_position_target",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            manifest = PolicyRegistry(Path(temp_dir)).discover()[0]
+            command = _resolve_runner_path(manifest)
+
+            self.assertEqual(Path(command[1]), runner_path.resolve())
+
+    def test_policy_format_folder_generates_a_policy_for_each_onnx_model(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            plugin_dir = Path(temp_dir) / "twist2"
+            plugin_dir.mkdir()
+            (plugin_dir / "tracking_policy_latest.json").write_text(
+                json.dumps({"onnx": {"path": "./template.onnx"}, "policy_joint_names": ["joint_a"]}),
+                encoding="utf-8",
+            )
+            (plugin_dir / "policy_latest.onnx").write_bytes(b"default model")
+            (plugin_dir / "walk_fast.onnx").write_bytes(b"new model")
+            (plugin_dir / "policy_format.json").write_text(
+                json.dumps(
+                    {
+                        "format_id": "twist2",
+                        "display_name": "Twist2 Tracking",
+                        "robot_type": "g1",
+                        "runtime": "browser",
+                        "framework": "onnx",
+                        "control_mode": "joint_position_target",
+                        "config_template": "tracking_policy_latest.json",
+                        "policy_id_prefix": "twist2",
+                        "display_name_i18n": {
+                            "zh": "Twist2 追踪",
+                            "en": "Twist2 Tracking",
+                        },
+                        "description_i18n": {
+                            "zh": "Twist2 浏览器 ONNX 策略。",
+                            "en": "Twist2 browser ONNX policy.",
+                        },
+                        "model_overrides": {
+                            "policy_latest.onnx": {
+                                "policy_id": "twist2_default",
+                                "display_name": "Twist2 Default",
+                                "display_name_i18n": {
+                                    "zh": "Twist2 默认",
+                                    "en": "Twist2 Default",
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            policies = PolicyRegistry(Path(temp_dir)).discover()
+            by_id = {policy.policy_id: policy for policy in policies}
+
+            self.assertEqual(set(by_id), {"twist2_default", "twist2_walk_fast"})
+            self.assertEqual(by_id["twist2_default"].display_name, "Twist2 Default")
+            self.assertEqual(by_id["twist2_default"].display_name_i18n["zh"], "Twist2 默认")
+            self.assertEqual(by_id["twist2_walk_fast"].display_name, "Twist2 Tracking / walk_fast")
+            self.assertEqual(by_id["twist2_walk_fast"].display_name_i18n["en"], "Twist2 Tracking / walk_fast")
+            self.assertEqual(by_id["twist2_walk_fast"].description_i18n["zh"], "Twist2 浏览器 ONNX 策略。")
+            self.assertEqual(by_id["twist2_walk_fast"].format_id, "twist2")
+            self.assertEqual(by_id["twist2_walk_fast"].model_file, "walk_fast.onnx")
+            self.assertEqual(by_id["twist2_walk_fast"].config_path, "/api/policy-plugins/twist2_walk_fast/config")
+
+    def test_policy_registry_rediscovers_new_onnx_models_after_initial_list(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            plugin_dir = Path(temp_dir) / "twist2"
+            plugin_dir.mkdir()
+            (plugin_dir / "tracking_policy_latest.json").write_text(
+                json.dumps({"onnx": {"meta": {"in_keys": ["policy"]}}, "policy_joint_names": ["joint_a"]}),
+                encoding="utf-8",
+            )
+            (plugin_dir / "first.onnx").write_bytes(b"first model")
+            (plugin_dir / "policy_format.json").write_text(
+                json.dumps(
+                    {
+                        "format_id": "twist2",
+                        "display_name": "Twist2 Tracking",
+                        "robot_type": "g1",
+                        "runtime": "browser",
+                        "framework": "onnx",
+                        "config_template": "tracking_policy_latest.json",
+                        "policy_id_prefix": "twist2",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            registry = PolicyRegistry(Path(temp_dir))
+            self.assertEqual([policy.policy_id for policy in registry.list()], ["twist2_first"])
+
+            (plugin_dir / "second.onnx").write_bytes(b"second model")
+
+            policy_ids = {policy.policy_id for policy in registry.list()}
+            self.assertEqual(policy_ids, {"twist2_first", "twist2_second"})
+            config = registry.policy_config("twist2_second")
+            self.assertEqual(config["onnx"]["path"], "/policy-plugins/twist2/second.onnx")
+
+    def test_policy_format_config_rewrites_onnx_path_for_selected_model(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            plugin_dir = Path(temp_dir) / "twist2"
+            plugin_dir.mkdir()
+            (plugin_dir / "tracking_policy_latest.json").write_text(
+                json.dumps({"onnx": {"meta": {"in_keys": ["policy"]}}, "policy_joint_names": ["joint_a"]}),
+                encoding="utf-8",
+            )
+            (plugin_dir / "walk_fast.onnx").write_bytes(b"new model")
+            (plugin_dir / "policy_format.json").write_text(
+                json.dumps(
+                    {
+                        "format_id": "twist2",
+                        "display_name": "Twist2 Tracking",
+                        "robot_type": "g1",
+                        "runtime": "browser",
+                        "framework": "onnx",
+                        "config_template": "tracking_policy_latest.json",
+                        "policy_id_prefix": "twist2",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            registry = PolicyRegistry(Path(temp_dir))
+            registry.discover()
+            config = registry.policy_config("twist2_walk_fast")
+
+            self.assertEqual(config["onnx"]["path"], "/policy-plugins/twist2/walk_fast.onnx")
+            self.assertEqual(config["policy_joint_names"], ["joint_a"])
+
+
 class SessionControllerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SessionController()
 
     def tearDown(self) -> None:
         self.controller.shutdown()
+
+    def test_backend_policy_loop_uses_50hz_control_interval(self) -> None:
+        self.assertEqual(self.controller._policy_step_interval, 1.0 / 50.0)
 
     def test_load_seek_and_tick_dataset_sequence(self) -> None:
         items = self.controller.scan_path(str(SONIC_SAMPLE))
@@ -257,17 +445,19 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertIn("policy stopped", logs)
         self.assertIn("physics disabled", logs)
 
-    def test_load_clip_resets_physics_related_session_state(self) -> None:
+    def test_load_clip_preserves_enabled_physics_runtime(self) -> None:
         self.controller.toggle_physics(True)
         self.controller.seek(1)
         self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
         summary = self.controller.get_session_summary()
 
-        self.assertFalse(summary.physics_enabled)
-        self.assertIsNone(summary.active_policy_id)
-        self.assertEqual(summary.view_mode, "dataset")
+        self.assertTrue(summary.physics_enabled)
+        self.assertEqual(summary.active_policy_id, "mock_g1_policy")
+        self.assertEqual(summary.view_mode, "policy")
+        self.assertEqual(summary.current_frame, 0)
         self.assertEqual(summary.last_observation_summary, {})
         self.assertEqual(summary.last_action_summary, {})
+        self.assertTrue(self.controller.consume_physics_reset_flag())
 
     def test_load_clip_logs_policy_stop_for_manual_policy(self) -> None:
         self.controller.start_policy("mock_g1_policy")
@@ -481,6 +671,74 @@ class GroupedApiTest(unittest.TestCase):
         step = self.client.post("/api/policies/step", json={"policy_id": "mock_g1_policy"})
         self.assertEqual(step.status_code, 200)
         self.assertIn("mode", step.json()["result"])
+
+    def test_policy_plugins_endpoint_lists_browser_and_python_plugins(self) -> None:
+        response = self.client.get("/api/policy-plugins")
+
+        self.assertEqual(response.status_code, 200)
+        policies = response.json()["policies"]
+        policy_ids = {policy["policy_id"] for policy in policies}
+        twist2_models = sorted((REPO_ROOT / "policy_plugins" / "twist2").glob("*.onnx"))
+        expected_twist2_policy_ids = {_twist2_policy_id_for_model(model_path) for model_path in twist2_models}
+        self.assertIn("mock_passthrough", policy_ids)
+        self.assertIn("motion_tracking", policy_ids)
+        self.assertGreaterEqual(len(expected_twist2_policy_ids), 2)
+        self.assertTrue(expected_twist2_policy_ids.issubset(policy_ids))
+        self.assertIn("mock_g1_policy", policy_ids)
+        self.assertNotIn("g1_tracking_onnx", policy_ids)
+        onnx_policy = next(policy for policy in policies if policy["policy_id"] == "motion_tracking")
+        self.assertEqual(onnx_policy["runtime"], "browser")
+        self.assertEqual(onnx_policy["framework"], "onnx")
+        self.assertEqual(
+            onnx_policy["config_path"],
+            "/api/policy-plugins/motion_tracking/config",
+        )
+        self.assertEqual(onnx_policy["format_id"], "motion_tracking")
+        self.assertEqual(onnx_policy["model_file"], "policy_latest.onnx")
+        self.assertEqual(onnx_policy["display_name_i18n"]["zh"], "运动追踪")
+        by_id = {policy["policy_id"]: policy for policy in policies}
+        for model_path in twist2_models:
+            policy_id = _twist2_policy_id_for_model(model_path)
+            twist2_policy = by_id[policy_id]
+            self.assertEqual(twist2_policy["format_id"], "twist2")
+            self.assertEqual(twist2_policy["model_file"], model_path.name)
+            self.assertEqual(twist2_policy["display_name_i18n"]["zh"], f"Twist2 / {model_path.stem}")
+
+    def test_policy_plugin_assets_are_served_from_the_policy_folder(self) -> None:
+        config_response = self.client.get("/policy-plugins/motion_tracking/tracking_policy_latest.json")
+        self.assertEqual(config_response.status_code, 200)
+        self.assertEqual(config_response.json()["onnx"]["path"], "./policy_latest.onnx")
+
+        twist2_config_response = self.client.get("/policy-plugins/twist2/tracking_policy_latest.json")
+        self.assertEqual(twist2_config_response.status_code, 200)
+        self.assertNotIn("path", twist2_config_response.json()["onnx"])
+
+        model_response = self.client.get("/policy-plugins/motion_tracking/policy_latest.onnx")
+        self.assertEqual(model_response.status_code, 200)
+        self.assertEqual(model_response.headers["content-type"], "application/octet-stream")
+        self.assertGreater(len(model_response.content), 1024)
+
+        twist2_model_response = self.client.get("/policy-plugins/twist2/twist2_1017_25k.onnx")
+        self.assertEqual(twist2_model_response.status_code, 200)
+        self.assertEqual(twist2_model_response.headers["content-type"], "application/octet-stream")
+        self.assertGreater(len(twist2_model_response.content), 1024)
+
+    def test_policy_plugin_dynamic_config_points_to_the_selected_model(self) -> None:
+        response = self.client.get("/api/policy-plugins/motion_tracking/config")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["onnx"]["path"], "/policy-plugins/motion_tracking/policy_latest.onnx")
+        self.assertIn("policy_joint_names", payload)
+
+        for model_path in sorted((REPO_ROOT / "policy_plugins" / "twist2").glob("*.onnx")):
+            policy_id = _twist2_policy_id_for_model(model_path)
+            twist2_response = self.client.get(f"/api/policy-plugins/{policy_id}/config")
+
+            self.assertEqual(twist2_response.status_code, 200)
+            twist2_payload = twist2_response.json()
+            self.assertEqual(twist2_payload["onnx"]["path"], f"/policy-plugins/twist2/{model_path.name}")
+            self.assertIn("policy_joint_names", twist2_payload)
 
     def test_session_state_endpoint_returns_current_state_and_joint_names(self) -> None:
         self.client.post("/api/session/load", json={"path": str(SONIC_SAMPLE), "format": "sonic"})
@@ -770,14 +1028,7 @@ class BrowserApiTest(unittest.TestCase):
         self.assertEqual(nodes["twist2_demo.pkl"]["node_type"], "motion")
         self.assertEqual(nodes["twist2_demo.pkl"]["format"], "twist2")
 
-    def test_browser_list_rejects_missing_root(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            missing_path = Path(temp_dir) / "never-created-child"
-            response = self.client.post("/api/browser/list", json={"path": str(missing_path)})
-            self.assertEqual(response.status_code, 400)
-            self.assertIn("Path does not exist", response.text)
-
-    def test_browser_list_keeps_nested_twist2_dirs_expandable(self) -> None:
+    def test_browser_list_returns_only_current_directory_level(self) -> None:
         with TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             pack_dir = temp_root / "pack"
@@ -794,28 +1045,93 @@ class BrowserApiTest(unittest.TestCase):
                 )
             )
 
-            root_response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
-            self.assertEqual(root_response.status_code, 200)
-            root_nodes = {node["name"]: node for node in root_response.json()["nodes"]}
+            response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            root_nodes = {node["name"]: node for node in response.json()["nodes"]}
             self.assertIn("pack", root_nodes)
-            self.assertEqual(root_nodes["pack"]["node_type"], "directory")
-            self.assertTrue(root_nodes["pack"]["has_children"])
-            self.assertNotIn("motion.json", root_nodes)
+            pack_node = root_nodes["pack"]
+            self.assertEqual(pack_node["node_type"], "directory")
+            self.assertTrue(pack_node["has_children"])
+            self.assertEqual(pack_node["children"], [])
+            self.assertNotIn("pack/sub", root_nodes)
 
-            pack_response = self.client.post("/api/browser/list", json={"path": str(pack_dir)})
-            self.assertEqual(pack_response.status_code, 200)
-            pack_nodes = {node["name"]: node for node in pack_response.json()["nodes"]}
-            self.assertIn("sub", pack_nodes)
-            self.assertEqual(pack_nodes["sub"]["node_type"], "directory")
-            self.assertTrue(pack_nodes["sub"]["has_children"])
-            self.assertNotIn("motion.json", pack_nodes)
-
-            sub_response = self.client.post("/api/browser/list", json={"path": str(sub_dir)})
+            sub_response = self.client.post("/api/browser/list", json={"path": str(pack_dir)})
             self.assertEqual(sub_response.status_code, 200)
+            self.assertEqual(sub_response.json()["parent"], str(temp_root.resolve()))
             sub_nodes = {node["name"]: node for node in sub_response.json()["nodes"]}
-            self.assertIn("motion.json", sub_nodes)
-            self.assertEqual(sub_nodes["motion.json"]["node_type"], "motion")
-            self.assertEqual(sub_nodes["motion.json"]["format"], "twist2")
+            self.assertIn("sub", sub_nodes)
+            sub_node = sub_nodes["sub"]
+            self.assertEqual(sub_node["name"], "sub")
+            self.assertEqual(sub_node["relative_path"], "sub")
+            self.assertEqual(sub_node["node_type"], "directory")
+            self.assertTrue(sub_node["has_children"])
+            self.assertEqual(sub_node["children"], [])
+
+            motion_response = self.client.post("/api/browser/list", json={"path": str(sub_dir)})
+            self.assertEqual(motion_response.status_code, 200)
+            self.assertEqual(motion_response.json()["parent"], str(pack_dir.resolve()))
+            motion_nodes = {node["name"]: node for node in motion_response.json()["nodes"]}
+            motion_node = motion_nodes["motion.json"]
+            self.assertEqual(motion_node["name"], "motion.json")
+            self.assertEqual(motion_node["relative_path"], "motion.json")
+            self.assertEqual(motion_node["node_type"], "motion")
+            self.assertEqual(motion_node["format"], "twist2")
+
+    def test_browser_list_returns_parent_for_navigation(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            child_dir = temp_root / "child"
+            child_dir.mkdir()
+            (child_dir / "motion.pkl").write_bytes(b"placeholder")
+
+            response = self.client.post("/api/browser/list", json={"path": str(child_dir)})
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["root"], str(child_dir.resolve()))
+            self.assertEqual(response.json()["parent"], str(temp_root.resolve()))
+
+    def test_browser_list_lazily_enters_nested_sonic_motion_dirs(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            library_dir = temp_root / "library"
+            dance_dir = library_dir / "dance"
+            motion_dir = temp_root / "library" / "dance" / "take_01"
+            motion_dir.mkdir(parents=True)
+            (motion_dir / "joint_pos.csv").write_text("hip\n0.0\n")
+
+            response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            library_node = response.json()["nodes"][0]
+            self.assertEqual(library_node["name"], "library")
+            self.assertEqual(library_node["node_type"], "directory")
+            self.assertTrue(library_node["has_children"])
+            self.assertEqual(library_node["children"], [])
+
+            library_response = self.client.post("/api/browser/list", json={"path": str(library_dir)})
+            self.assertEqual(library_response.status_code, 200)
+            dance_node = library_response.json()["nodes"][0]
+            self.assertEqual(dance_node["name"], "dance")
+            self.assertEqual(dance_node["node_type"], "directory")
+            self.assertTrue(dance_node["has_children"])
+            self.assertEqual(dance_node["children"], [])
+
+            dance_response = self.client.post("/api/browser/list", json={"path": str(dance_dir)})
+            self.assertEqual(dance_response.status_code, 200)
+            motion_node = dance_response.json()["nodes"][0]
+            self.assertEqual(motion_node["name"], "take_01")
+            self.assertEqual(motion_node["relative_path"], "take_01")
+            self.assertEqual(motion_node["path"], str(motion_dir.resolve()))
+            self.assertEqual(motion_node["node_type"], "motion")
+            self.assertEqual(motion_node["format"], "sonic")
+
+    def test_browser_list_rejects_missing_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            missing_path = Path(temp_dir) / "never-created-child"
+            response = self.client.post("/api/browser/list", json={"path": str(missing_path)})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("Path does not exist", response.text)
 
     def test_browser_list_clears_stale_session_items_after_scan(self) -> None:
         scan_response = self.client.post("/api/scan", json={"path": str(SONIC_SAMPLE)})
@@ -847,12 +1163,12 @@ class BrowserApiTest(unittest.TestCase):
                 )
             )
 
-            def detect_format_guard(path: Path) -> str | None:
+            def fast_format_guard(path: Path) -> str | None:
                 if path.is_dir():
-                    raise AssertionError(f"detect_format called on directory: {path}")
-                return importer_detect_format(path)
+                    raise AssertionError(f"browser format detection called on directory: {path}")
+                return "twist2" if path.suffix.lower() == ".json" else None
 
-            with patch("g1_viewer.browser.detect_format", side_effect=detect_format_guard):
+            with patch("g1_viewer.browser._fast_motion_format", side_effect=fast_format_guard):
                 response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
 
             self.assertEqual(response.status_code, 200)
@@ -860,6 +1176,81 @@ class BrowserApiTest(unittest.TestCase):
             self.assertIn("pack", nodes)
             self.assertEqual(nodes["pack"]["node_type"], "directory")
             self.assertTrue(nodes["pack"]["has_children"])
+
+    def test_browser_list_detects_twist2_by_extension_without_sniffing_payloads(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            motion_file = temp_root / "huge_motion.pkl"
+            motion_file.write_bytes(b"not a pickle and should not be opened during scan")
+
+            response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            nodes = response.json()["nodes"]
+            self.assertEqual(len(nodes), 1)
+            self.assertEqual(nodes[0]["name"], "huge_motion.pkl")
+            self.assertEqual(nodes[0]["node_type"], "motion")
+            self.assertEqual(nodes[0]["format"], "twist2")
+
+
+class TrimExportApiTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.controller = SessionController()
+        self.client = TestClient(create_app(self.controller))
+
+    def tearDown(self) -> None:
+        self.client.close()
+        self.controller.shutdown()
+
+    def test_trim_export_can_force_sonic_to_custom_output_dir_without_format_subdir(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            sequence = self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "export_format": "sonic",
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "sonic")
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertTrue((output_path / "joint_pos.csv").exists())
+            self.assertFalse((output_dir / "sonic").exists())
+
+    def test_trim_export_can_force_twist2_extension_to_custom_output_dir(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            sequence = self.controller.load_clip(str(SONIC_SAMPLE), "sonic")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "export_format": "twist2",
+                    "output_dir": str(output_dir),
+                    "twist2_extension": ".json",
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "twist2")
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertEqual(output_path.suffix, ".json")
+            self.assertTrue(output_path.exists())
+            self.assertFalse((output_dir / "twist2").exists())
 
 
 class PolicyStepSnapshotTest(unittest.TestCase):
