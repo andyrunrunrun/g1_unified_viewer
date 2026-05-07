@@ -1,7 +1,16 @@
 import * as ort from 'onnxruntime-web';
 import { Observations } from './observationHelpers.js';
 import { TrackingHelper } from './trackingHelper.js';
-import { toFloatArray } from './utils/math.js';
+import {
+  clampFutureIndices,
+  normalizeQuat,
+  quatApplyInv,
+  quatInverse,
+  quatMultiply,
+  quatToRot6d,
+  toFloatArray,
+  yawComponent
+} from './utils/math.js';
 
 export const DEFAULT_BROWSER_POLICY_MANIFESTS = Object.freeze([
   {
@@ -44,7 +53,7 @@ export const DEFAULT_BROWSER_POLICY_MANIFESTS = Object.freeze([
 export function browserRunnablePolicies(policies = []) {
   return policies.filter((policy) => (
     policy?.runtime === 'browser'
-    && ['mock', 'onnx'].includes(policy?.framework)
+    && ['mock', 'onnx', 'custom_js'].includes(policy?.framework)
   ));
 }
 
@@ -76,12 +85,53 @@ function resolveStaticAssetPath(configPath, assetPath) {
   return new URL(assetPath, new URL(configPath, origin)).pathname;
 }
 
+async function importBrowserPolicyModule(modulePath) {
+  if (!modulePath) {
+    throw new Error('Custom browser policy manifest missing module_path.');
+  }
+  if (typeof globalThis.__g1ImportBrowserPolicyModule === 'function') {
+    return globalThis.__g1ImportBrowserPolicyModule(modulePath);
+  }
+  return import(/* @vite-ignore */ modulePath);
+}
+
+function makeBrowserPolicyHost() {
+  return {
+    ort,
+    loadPolicyConfig,
+    resolveStaticAssetPath,
+    normalizeFrameCacheAsMotionClip,
+    makeDefaultStanceTarget,
+    referenceToPolicyState,
+    cloneArray,
+    clonePhysicsOptions,
+    toFloatArray,
+    math: {
+      clampFutureIndices,
+      normalizeQuat,
+      quatApplyInv,
+      quatInverse,
+      quatMultiply,
+      quatToRot6d,
+      yawComponent
+    }
+  };
+}
+
 function makeTensor(name, value) {
   if (name === 'is_init') {
     return new ort.Tensor('bool', [Boolean(value)], [1]);
   }
   const data = ArrayBuffer.isView(value) ? value : Float32Array.from(value ?? []);
   return new ort.Tensor('float32', data, [1, data.length]);
+}
+
+function clampTargetSmoothingAlpha(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0.1;
+  }
+  return Math.min(1, Math.max(0.01, numeric));
 }
 
 function makeDefaultStanceTarget({
@@ -169,6 +219,45 @@ function summarizeOutput(output) {
     joint_count: output.joint_names?.length ?? 0,
     has_root_target: Array.isArray(output.root_translation)
   };
+}
+
+function makeTrackingReferencePayload(policy, bodyNames = []) {
+  const tracking = policy?.tracking;
+  if (!tracking || tracking.isReady?.() === false) {
+    return null;
+  }
+  const state = tracking.playbackState?.() ?? {};
+  if (!state.available) {
+    return null;
+  }
+  const frameIndex = Math.max(0, Math.min(Number(state.refIdx ?? tracking.refIdx ?? 0), Math.max(Number(state.refLen ?? tracking.refLen ?? 1) - 1, 0)));
+  const frame = tracking.getFrame?.(frameIndex);
+  if (!frame?.jointPos) {
+    return null;
+  }
+  return {
+    sequence_id: state.currentName ?? 'tracking',
+    frame_index: Number(state.sourceFrame ?? frameIndex),
+    tracking_frame_index: frameIndex,
+    joint_names: cloneArray(policy.policyJointNames),
+    body_names: cloneArray(bodyNames),
+    state: {
+      root_translation: cloneArray(frame.rootPos, [0, 0, 0.78]).map((value) => Number(Number(value).toFixed(6))),
+      root_rotation_wxyz: cloneArray(frame.rootQuat, [1, 0, 0, 0]).map((value) => Number(Number(value).toFixed(6))),
+      joint_positions: cloneArray(frame.jointPos).map((value) => Number(Number(value).toFixed(6)))
+    }
+  };
+}
+
+function anchorTrackingToCurrentState(policy, statePayload) {
+  const tracking = policy?.tracking;
+  if (!tracking?.anchorCurrentFrameToState || !statePayload) {
+    return false;
+  }
+  const state = statePayload.rootPos && statePayload.rootQuat
+    ? statePayload
+    : referenceToPolicyState(statePayload, policy.policyJointNames ?? []);
+  return tracking.anchorCurrentFrameToState(state);
 }
 
 export function normalizeFrameCacheAsMotionClip(frameCache) {
@@ -271,6 +360,12 @@ export class BrowserOnnxPolicy {
     this.obsModules = [];
     this.numObs = 0;
     this.isInferencing = false;
+    this.targetSmoothing = {
+      enabled: false,
+      alpha: 0.1,
+      values: new Map()
+    };
+    this.pendingTrackingAnchorState = null;
   }
 
   async load() {
@@ -381,6 +476,8 @@ export class BrowserOnnxPolicy {
   reset(state = null) {
     this.inputState = {};
     this.lastActions = new Float32Array(this.numActions);
+    this.resetTargetSmoothing();
+    this.pendingTrackingAnchorState = null;
     this.tracking?.reset(state);
     for (const obs of this.obsModules) {
       obs.reset?.(state);
@@ -394,8 +491,69 @@ export class BrowserOnnxPolicy {
     }
   }
 
+  _ensureTargetSmoothing() {
+    if (!this.targetSmoothing) {
+      this.targetSmoothing = {
+        enabled: false,
+        alpha: 0.1,
+        values: new Map()
+      };
+    }
+    return this.targetSmoothing;
+  }
+
+  configureTargetSmoothing(options = {}) {
+    const smoothing = this._ensureTargetSmoothing();
+    const nextEnabled = Boolean(options.enabled);
+    const nextAlpha = clampTargetSmoothingAlpha(options.alpha ?? smoothing.alpha);
+    const enabledChanged = smoothing.enabled !== nextEnabled;
+    smoothing.enabled = nextEnabled;
+    smoothing.alpha = nextAlpha;
+    if (enabledChanged || !nextEnabled) {
+      this.resetTargetSmoothing();
+    }
+    return {
+      enabled: smoothing.enabled,
+      alpha: smoothing.alpha
+    };
+  }
+
+  resetTargetSmoothing() {
+    const smoothing = this._ensureTargetSmoothing();
+    smoothing.values.clear();
+  }
+
+  smoothTargetVector(key, values) {
+    const input = ArrayBuffer.isView(values) ? values : Float32Array.from(values ?? []);
+    const smoothing = this._ensureTargetSmoothing();
+    if (!smoothing.enabled) {
+      return input;
+    }
+
+    const cacheKey = String(key || 'target');
+    const previous = smoothing.values.get(cacheKey);
+    let output;
+    if (!previous || previous.length !== input.length) {
+      output = Float32Array.from(input);
+    } else {
+      output = new Float32Array(input.length);
+      const alpha = smoothing.alpha;
+      const keep = 1 - alpha;
+      for (let index = 0; index < input.length; index += 1) {
+        output[index] = alpha * Number(input[index] ?? 0) + keep * Number(previous[index] ?? 0);
+      }
+    }
+
+    smoothing.values.set(cacheKey, Float32Array.from(output));
+    return output;
+  }
+
   _buildObservation(state) {
     this.tracking?.advance();
+    if (this.pendingTrackingAnchorState) {
+      anchorTrackingToCurrentState(this, this.pendingTrackingAnchorState);
+      this.pendingTrackingAnchorState = null;
+    }
     const obsForPolicy = new Float32Array(this.numObs);
     let offset = 0;
     for (const obs of this.obsModules) {
@@ -454,6 +612,7 @@ export class BrowserOnnxPolicy {
       const reference = input.reference ?? {};
       const referenceState = reference.state ?? {};
       const policyState = referenceToPolicyState(input.current_state ?? reference, this.policyJointNames);
+      this.pendingTrackingAnchorState = policyState;
       const outputs = await this.session.run(this._buildInputs(policyState));
       const action = this._readOutput(outputs);
       if (!action || action.length < this.policyJointNames.length) {
@@ -467,6 +626,7 @@ export class BrowserOnnxPolicy {
         return Number(this.defaultJointPos[index] ?? 0) + Number(this.actionScale[index] ?? 1) * clipped;
       });
 
+      const trackingReferenceState = makeTrackingReferencePayload(this)?.state;
       const output = {
         mode: 'joint_position_target',
         joint_names: cloneArray(this.policyJointNames),
@@ -474,8 +634,8 @@ export class BrowserOnnxPolicy {
         kp: cloneArray(this.stiffness),
         kd: cloneArray(this.damping),
         torque_limits: cloneArray(this.torqueLimits),
-        root_translation: cloneArray(referenceState.root_translation, [0, 0, 0.78]),
-        root_rotation_wxyz: cloneArray(referenceState.root_rotation_wxyz, [1, 0, 0, 0]),
+        root_translation: cloneArray(trackingReferenceState?.root_translation ?? referenceState.root_translation, [0, 0, 0.78]),
+        root_rotation_wxyz: cloneArray(trackingReferenceState?.root_rotation_wxyz ?? referenceState.root_rotation_wxyz, [1, 0, 0, 0]),
         control_dt: this.controlDt
       };
       const physics = clonePhysicsOptions(this.physicsOptions);
@@ -484,6 +644,7 @@ export class BrowserOnnxPolicy {
       }
       return output;
     } finally {
+      this.pendingTrackingAnchorState = null;
       this.isInferencing = false;
     }
   }
@@ -522,16 +683,31 @@ export class BrowserPolicyRuntime {
     this.activePolicy = null;
     this.activePolicyId = null;
     this.lastOutput = null;
+    this.targetSmoothingOptions = {
+      enabled: false,
+      alpha: 0.1
+    };
   }
 
   async activate(manifest) {
     if (!manifest) {
       throw new Error('No browser policy manifest selected.');
     }
-    const nextPolicy = manifest.framework === 'mock'
-      ? new MockPassthroughPolicy(manifest)
-      : new BrowserOnnxPolicy(manifest);
+    let nextPolicy;
+    if (manifest.framework === 'mock') {
+      nextPolicy = new MockPassthroughPolicy(manifest);
+    } else if (manifest.framework === 'custom_js') {
+      const modulePath = resolveStaticAssetPath(manifest.config_path || '/', manifest.module_path);
+      const module = await importBrowserPolicyModule(modulePath);
+      if (typeof module.createBrowserPolicy !== 'function') {
+        throw new Error(`Custom browser policy module missing createBrowserPolicy(): ${modulePath}`);
+      }
+      nextPolicy = await module.createBrowserPolicy(manifest, makeBrowserPolicyHost());
+    } else {
+      nextPolicy = new BrowserOnnxPolicy(manifest);
+    }
     await nextPolicy.load();
+    nextPolicy.configureTargetSmoothing?.(this.targetSmoothingOptions);
     this.activePolicy = nextPolicy;
     this.activePolicyId = manifest.policy_id;
     this.lastOutput = null;
@@ -547,6 +723,15 @@ export class BrowserPolicyRuntime {
   reset() {
     this.activePolicy?.reset?.();
     this.lastOutput = null;
+  }
+
+  configureTargetSmoothing(options = {}) {
+    this.targetSmoothingOptions = {
+      enabled: Boolean(options.enabled),
+      alpha: clampTargetSmoothingAlpha(options.alpha ?? this.targetSmoothingOptions.alpha)
+    };
+    this.activePolicy?.configureTargetSmoothing?.(this.targetSmoothingOptions);
+    return { ...this.targetSmoothingOptions };
   }
 
   async step(input) {
@@ -586,6 +771,10 @@ export class BrowserPolicyRuntime {
 
   trackingState() {
     return this.activePolicy?.tracking?.playbackState?.() ?? null;
+  }
+
+  currentTrackingReferencePayload(options = {}) {
+    return makeTrackingReferencePayload(this.activePolicy, options.body_names ?? []);
   }
 }
 

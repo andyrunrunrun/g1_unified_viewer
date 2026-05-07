@@ -220,6 +220,7 @@ class PolicyManifest(BaseModel):
     entrypoint: str | None = None
     weights_path: str | None = None
     config_path: str | None = None
+    module_path: str | None = None
     control_mode: CommandMode = "joint_position_target"
     tags: list[str] = Field(default_factory=list)
     description: str = ""

@@ -1,185 +1,101 @@
 # G1 Unified Viewer
 
-这是一个面向 **Unitree G1** 的本地动作与策略可视化仓库，当前主形态是：
+面向 **Unitree G1** 的本地动作查看、浏览器 MuJoCo 仿真和策略可视化工作台。
 
-- 一个 **MuJoCo 原生交互窗口**
-  - 负责真正的 3D 可视化
-  - 可以直接用鼠标拖动、旋转、缩放视角
-- 一个 **网页控制面板**
-  - 负责扫描数据、切换动作、播放控制、裁剪导出和策略切换
+当前主流程是：
 
-这个仓库的运行时目标是**自包含**：
+- 后端 FastAPI 负责本地数据扫描、动作加载、裁剪导出、策略插件发现和静态资源服务。
+- 前端 Vue + Vite 负责控制台 UI、动作播放、浏览器 MuJoCo viewer 和浏览器策略推理。
+- MuJoCo 仿真在浏览器中通过 `mujoco-js` WASM 运行。
+- ONNX 策略在浏览器中通过 `onnxruntime-web` 运行。
 
-- 不依赖 `RoboJuDo`
-- 不依赖 `TWIST2`
-- 不依赖 `GR00T-WholeBodyControl`
-- G1 的 MuJoCo 资产已经内置在 `assets/g1/`
-
-## 架构边界
-
-- `SessionController`
-  - 单一状态源，统一持有浏览树、动作加载、播放、trim、physics、policy、viewer 摘要和诊断信息
-- `HTTP API + native viewer`
-  - `HTTP API` 负责控制、自动化和网页面板入口
-  - `native viewer` 负责 MuJoCo 渲染、本地高频快捷键和 physics runtime
-
-当前控制面板已经优先使用 grouped session endpoint：
-
-- `/api/session/load`
-- `/api/session/playback`
-- `/api/session/trim`
-- `/api/session/physics`
-- `/api/policies/active`
-- `/api/policies/step`
-
-旧的 `/api/load_clip`、`/api/playback/*`、`/api/policies/start|stop|mock_step` 仍然保留为兼容别名，但都会收敛到同一套 controller 逻辑。
-
-## Physics OFF / ON
-
-- `Physics OFF`
-  - native viewer 直接回放 reference state
-  - 网页面板只消费 `SessionController` 汇总后的 session summary
-- `Physics ON`
-  - runtime 从 `SessionController` 读取 reference target 和 reset 信号
-  - policy runner 读取 `robot_state + reference_target`
-  - MuJoCo step 和 observation/action 摘要回写到 `SessionController`
+项目默认聚焦 G1 全身 motion tracking。关闭 Physics 时，viewer 直接播放动作；开启 Physics 时，动作会作为目标轨迹送给当前策略，由策略输出关节位置目标，再由浏览器 MuJoCo 进行 PD 控制和仿真。
 
 ## 当前能力
 
-目前已经支持：
+- 扫描本地动作目录，支持按文件夹懒加载浏览。
+- 加载 `sonic` 和 `twist2` 动作数据。
+- 播放、暂停、停止、跳帧、循环播放。
+- 裁剪动作并导出为 `sonic` 或 `twist2` 格式。
+- 浏览器 MuJoCo G1 viewer，可用鼠标旋转、缩放、拖拽施加外力。
+- Physics ON 时支持：
+  - 策略跟踪动作。
+  - 暂停后持续给默认站姿目标。
+  - Reset 回默认站姿。
+  - 起步 2 秒插值过渡。
+  - 可选目标平滑 `smooth_body` 风格 EMA。
+- 策略插件系统：
+  - `mock_passthrough`
+  - `motion_tracking`
+  - `twist2`
+  - `sonic`
+  - 后端子进程 mock 示例 `mock_g1_policy`
 
-- 扫描和加载 `sonic` 风格动作目录
-- 扫描和加载 `TWIST2` 风格动作文件
-- 将两类数据统一映射到 G1 的内部状态表示
-- 在 MuJoCo 原生窗口中播放动作
-- 通过网页控制面板进行：
-  - 播放 / 暂停 / 停止
-  - 拖动时间轴和跳帧
-  - 设置裁剪起止帧
-  - 导出裁剪结果回原格式
-  - 启动 / 停止统一策略 runner
-- 保留统一策略接口，便于后续继续接入更多全身控制策略
+## 快速启动
 
-## 启动方式
+建议开发时分别启动后端和前端。
 
-在仓库根目录执行：
+1. 启动后端 API，默认使用 `8050`：
 
 ```bash
 cd /home/huanghao/source/code/g1_unified_viewer
-uv run python main.py
+uv run uvicorn g1_viewer.api:app --host 127.0.0.1 --port 8050
 ```
 
-默认会：
-
-- 启动网页控制面板：`http://127.0.0.1:8000`
-- 同时打开 MuJoCo 原生窗口
-
-注意：
-
-- MuJoCo 原生窗口需要可用的桌面图形环境
-- 如果当前 shell 没有 `DISPLAY`，原生窗口无法启动
-- 这种情况下可以先用 `examples/` 里的离屏示例检查 importer / API / policy 接口
-
-如果端口冲突，可以显式指定端口：
+2. 启动前端：
 
 ```bash
-uv run python main.py --port 8001
-```
-
-也可以指定 host：
-
-```bash
-uv run python main.py --host 0.0.0.0 --port 8001
-```
-
-## 浏览器 MuJoCo WASM 前端
-
-控制面板已经迁移到 `frontend/` 的 Vite 应用，并嵌入基于 `mujoco-js` + Three.js 的浏览器 3D viewer。浏览器 viewer 使用：
-
-- `frontend/public/examples/scenes/` 中的 G1 MJCF 和 mesh 资源
-- `/api/assets/browser-scene` 获取默认 scene manifest
-- `/api/session/state` 轮询当前 canonical robot state 并同步到 MuJoCo WASM 模型
-
-开发前端时可以同时启动后端 API 和 Vite：
-
-```bash
-uv run python main.py --port 8000
-cd frontend
+cd /home/huanghao/source/code/g1_unified_viewer/frontend
 npm install
 npm run dev
 ```
 
-生产或只通过 FastAPI 访问时，先构建前端：
+3. 打开：
+
+```text
+http://127.0.0.1:3000
+```
+
+Vite dev server 已将这些路径代理到后端 `8050`：
+
+- `/api`
+- `/policy-plugins`
+
+如果只想通过后端服务前端，可以先构建：
 
 ```bash
-cd frontend
+cd /home/huanghao/source/code/g1_unified_viewer/frontend
 npm install
 npm run build
 cd ..
-uv run python main.py
+uv run uvicorn g1_viewer.api:app --host 127.0.0.1 --port 8050
 ```
 
-如果没有 `frontend/dist/`，FastAPI 会回退服务 Vite 的源码入口；这适合开发检查 HTML shell，但浏览器模块加载应优先使用 Vite dev server 或已构建的 `dist/`。
+然后访问：
 
-## 预加载动作
-
-可以在启动时直接传入一个动作路径：
-
-```bash
-uv run python main.py --path /abs/path/to/sonic_dir
-uv run python main.py --path /abs/path/to/twist2_motion.pkl
+```text
+http://127.0.0.1:8050
 ```
 
-如果你已经知道格式，也可以显式指定：
+## 默认数据目录
 
-```bash
-uv run python main.py --path /abs/path/to/motion.pkl --format twist2
+前端默认扫描：
+
+```text
+/home/huanghao/source/datasets/gmr_retarget_x/AMASS_numpy123
 ```
 
-启动时还支持：
+也可以在 UI 的 Data 面板中输入任意本地目录，然后点击 Scan。目录浏览是懒加载的：只扫描当前文件夹，进入子文件夹后再扫描子文件夹。
 
-```bash
-uv run python main.py --path /abs/path/to/motion.pkl --loop
-uv run python main.py --path /abs/path/to/motion.pkl --start-paused
-```
+## 支持动作格式
 
-## 控制面板职责
-
-网页控制面板不再承担主渲染，而是只做控制和状态展示，主要包括：
-
-- 输入路径并扫描本地动作
-- 点击某条动作并加载
-- 控制播放状态和时间轴
-- 设置 trim 起止并导出
-- 查看当前 viewer 相机状态
-- 启动、停止、单步测试策略 runner
-
-## MuJoCo 原生快捷键
-
-在 MuJoCo 原生窗口中可直接使用：
-
-- `Space`
-  - 播放 / 暂停
-- `Left` / `Right`
-  - 前后单帧跳转
-- `R`
-  - 回到第 0 帧
-- `[` / `]`
-  - 把当前帧设为裁剪起点 / 终点
-- `N` / `P`
-  - 切换下一条 / 上一条动作
-- `L`
-  - 切换循环播放
-
-## 支持的数据格式
-
-### 1. sonic
+### sonic
 
 典型输入是一个目录，至少包含：
 
 - `joint_pos.csv`
 
-常见还会包含：
+常见可选文件：
 
 - `joint_vel.csv`
 - `body_pos.csv`
@@ -188,16 +104,16 @@ uv run python main.py --path /abs/path/to/motion.pkl --start-paused
 - `metadata.txt`
 - `info.txt`
 
-### 2. TWIST2
+### twist2
 
-当前支持这些扩展名：
+支持这些扩展名：
 
 - `.pkl`
 - `.npz`
 - `.npy`
 - `.json`
 
-会自动尝试识别常见字段，例如：
+导入器会自动识别常见字段，例如：
 
 - `dof_pos`
 - `joint_pos`
@@ -206,99 +122,95 @@ uv run python main.py --path /abs/path/to/motion.pkl --start-paused
 - `root_rot`
 - `local_body_pos`
 
-## 导出
+## 策略插件
 
-裁剪导出会尽量回写到原始格式：
-
-- `sonic` 输入会导出为 `sonic` 风格目录
-- `TWIST2` 输入会导出为 `.pkl` / `.npz` / `.json` 中与源文件一致的格式
-
-默认导出目录在：
+所有策略相关文件放在：
 
 ```text
-exports/
+policy_plugins/
 ```
 
-## 策略接口
+当前推荐两种浏览器策略接入方式：
 
-当前仓库已经有一个统一策略 runner 接口：
+- **ONNX 格式文件夹**：适合同一种训练框架导出的多个 `.onnx` 模型，例如 `twist2/`。
+- **custom JS 策略**：适合 SONIC 这种 encoder/decoder、多模型、多输入输出拼接逻辑明显不同的策略。
 
-- manifest 放在 `policy_manifests/`
-- runner 通过子进程方式启动
-- 主仓库和策略 runner 通过统一消息协议通信
+添加新策略的详细步骤见：
 
-当前内置了一个：
-
-- `mock_g1_policy`
-
-它主要用于验证：
-
-- 主仓库环境和策略进程解耦
-- 统一 observation / action 接口可行
-- 后续可以继续扩展到真实策略
-
-## 示例脚本
-
-`examples/` 目录里保留了一些兼容 / 调试用途的最小脚本：
-
-```bash
-uv run python examples/scan_render_example.py
-uv run python examples/api_roundtrip_example.py
-uv run python examples/policy_mock_example.py
-```
-
-这些脚本主要用于：
-
-- 验证 importer 是否正常
-- 验证旧的离屏渲染接口仍可用
-- 验证策略 runner 接口
-
-更详细说明见：
-
-- [`examples/README.md`](/home/huanghao/source/code/g1_unified_viewer/examples/README.md)
-
-## 可选环境变量
-
-- `G1_VIEWER_MJCF_PATH`
-  - 覆盖默认 G1 MuJoCo 模型路径
-- `MUJOCO_GL`
-  - 仅在你继续使用离屏渲染接口时通常才需要关心
-
-例如：
-
-```bash
-G1_VIEWER_MJCF_PATH=/abs/path/to/model.xml uv run python main.py
-```
+- [policy_plugins/README.md](/home/huanghao/source/code/g1_unified_viewer/policy_plugins/README.md)
 
 ## 目录说明
 
 - `main.py`
-  - 启动网页控制面板 + MuJoCo 原生窗口
-- `g1_viewer/session.py`
-  - 统一会话状态、播放状态、trim 状态和策略状态
-- `g1_viewer/viewer_runtime.py`
-  - MuJoCo 原生 viewer 主循环
+  - 兼容入口：启动 FastAPI 后端并打开原生 MuJoCo viewer runtime。
 - `g1_viewer/api.py`
-  - 控制面板 API
+  - HTTP API、前端静态资源、`/policy-plugins` 静态挂载。
+- `g1_viewer/session.py`
+  - 会话状态、动作加载、播放状态、trim、physics 状态。
 - `g1_viewer/importers.py`
-  - `sonic` / `TWIST2` 导入器
+  - `sonic` / `twist2` 动作导入。
 - `g1_viewer/exporters.py`
-  - 裁剪导出逻辑
+  - 裁剪导出。
 - `g1_viewer/policies.py`
-  - 策略 manifest 和 runner 管理
-- `g1_viewer/static/index.html`
-  - 网页控制面板
+  - 策略插件发现、`policy_format.json` 展开、动态 config 生成。
+- `frontend/src/App.vue`
+  - 主控制台 UI。
+- `frontend/src/simulation/`
+  - 浏览器 MuJoCo viewer、策略 runtime、tracking helper、观测构造。
+- `frontend/public/examples/scenes/`
+  - 暂存到 MuJoCo MEMFS 的 G1 MJCF 和 mesh 资源。
+- `policy_plugins/`
+  - 策略插件目录。
 
-## 后续扩展方向
+## 常用命令
 
-当前仓库已经按“统一策略接口”这个方向在设计：
+运行前端测试：
 
-- 数据集播放和策略播放共用一套 session
-- 不同策略环境可以继续通过独立 Python 环境 + 子进程 runner 解耦
-- 后续可以像 RoboJuDo 那样继续扩展自定义 observation / action 接口
+```bash
+cd frontend
+npm test -- --test-reporter=spec
+```
 
-但现在这个版本仍然优先聚焦于：
+构建前端：
 
-- 统一动作可视化
-- MuJoCo 原生交互
-- 轻量可控的策略接入底座
+```bash
+cd frontend
+npm run build
+```
+
+检查 diff 空白问题：
+
+```bash
+git diff --check
+```
+
+启动时预加载动作：
+
+```bash
+uv run python main.py --port 8050 --path /abs/path/to/motion_or_dir
+uv run python main.py --port 8050 --path /abs/path/to/motion.pkl --format twist2
+uv run python main.py --port 8050 --path /abs/path/to/sonic_dir --format sonic
+```
+
+这些预加载参数属于 `main.py` 兼容入口；浏览器工作台的常规数据加载建议直接在 UI 的 Data 面板中完成。
+
+可选参数：
+
+```bash
+uv run python main.py --port 8050 --loop
+uv run python main.py --port 8050 --start-paused
+uv run uvicorn g1_viewer.api:app --host 0.0.0.0 --port 8050
+```
+
+## 可选环境变量
+
+- `G1_VIEWER_MJCF_PATH`
+  - 覆盖默认 G1 MuJoCo 模型路径。
+- `MUJOCO_GL`
+  - 主要用于仍然需要原生/离屏 MuJoCo 渲染接口的场景。
+
+示例：
+
+```bash
+G1_VIEWER_MJCF_PATH=/abs/path/to/model.xml uv run uvicorn g1_viewer.api:app --host 127.0.0.1 --port 8050
+```

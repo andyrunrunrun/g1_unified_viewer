@@ -1,0 +1,26 @@
+{
+  "policy_id": "sonic",
+  "display_name": "SONIC",
+  "display_name_i18n": {
+    "zh": "SONIC",
+    "en": "SONIC"
+  },
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "custom_js",
+  "format_id": "sonic",
+  "module_path": "./SonicPolicy.js",
+  "config_path": "/policy-plugins/sonic/sonic_policy.json",
+  "control_mode": "joint_position_target",
+  "tags": [
+    "browser",
+    "sonic",
+    "onnx",
+    "tracking"
+  ],
+  "description": "Browser SONIC encoder/decoder policy plugin for G1 motion tracking.",
+  "description_i18n": {
+    "zh": "浏览器 SONIC encoder/decoder G1 动作跟踪策略。",
+    "en": "Browser SONIC encoder/decoder policy plugin for G1 motion tracking."
+  }
+}

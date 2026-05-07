@@ -130,7 +130,8 @@ class TrackingCommandObsRaw {
       const rel = quatMultiply(qCurInv, normalizeQuat(tracking.refRootQuat[index]));
       rot6d.push(...quatToRot6d(rel));
     }
-    return Float32Array.from([...posDiff, ...rot6d]);
+    const out = Float32Array.from([...posDiff, ...rot6d]);
+    return this.policy.smoothTargetVector?.('TrackingCommandObsRaw', out) ?? out;
   }
 }
 
@@ -150,7 +151,8 @@ class TargetRootZObs {
       return new Float32Array(this.size);
     }
     const indices = clampFutureIndices(tracking.refIdx, this.futureSteps, tracking.refLen);
-    return Float32Array.from(indices.map((index) => tracking.refRootPos[index][2] + 0.035));
+    const out = Float32Array.from(indices.map((index) => tracking.refRootPos[index][2] + 0.035));
+    return this.policy.smoothTargetVector?.('TargetRootZObs', out) ?? out;
   }
 }
 
@@ -185,7 +187,7 @@ class TargetJointPosObs {
     const merged = new Float32Array(out.length + outDiff.length);
     merged.set(out, 0);
     merged.set(outDiff, out.length);
-    return merged;
+    return this.policy.smoothTargetVector?.('TargetJointPosObs', merged) ?? merged;
   }
 }
 
@@ -214,7 +216,7 @@ class TargetProjectedGravityBObs {
       out[offset + 2] = gravityLocal[2];
       offset += 3;
     }
-    return out;
+    return this.policy.smoothTargetVector?.('TargetProjectedGravityBObs', out) ?? out;
   }
 }
 

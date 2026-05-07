@@ -1,0 +1,317 @@
+{
+  "policy_joint_names": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "default_joint_pos": [
+    -0.312,
+    0,
+    0,
+    0.669,
+    -0.363,
+    0,
+    -0.312,
+    0,
+    0,
+    0.669,
+    -0.363,
+    0,
+    0,
+    0,
+    0,
+    0.2,
+    0.2,
+    0,
+    0.6,
+    0,
+    0,
+    0,
+    0.2,
+    -0.2,
+    0,
+    0.6,
+    0,
+    0,
+    0
+  ],
+  "reset_joint_pos": [
+    -0.312,
+    0,
+    0,
+    0.669,
+    -0.363,
+    0,
+    -0.312,
+    0,
+    0,
+    0.669,
+    -0.363,
+    0,
+    0,
+    0,
+    0,
+    0.2,
+    0.2,
+    0,
+    0.6,
+    0,
+    0,
+    0,
+    0.2,
+    -0.2,
+    0,
+    0.6,
+    0,
+    0,
+    0
+  ],
+  "reset_root_translation": [
+    0,
+    0,
+    0.78
+  ],
+  "stiffness": [
+    99.0984278,
+    99.0984278,
+    40.1792385,
+    99.0984278,
+    28.5012462,
+    28.5012462,
+    99.0984278,
+    99.0984278,
+    40.1792385,
+    99.0984278,
+    28.5012462,
+    28.5012462,
+    40.1792385,
+    28.5012462,
+    28.5012462,
+    14.2506231,
+    14.2506231,
+    14.2506231,
+    14.2506231,
+    14.2506231,
+    16.7783275,
+    16.7783275,
+    14.2506231,
+    14.2506231,
+    14.2506231,
+    14.2506231,
+    14.2506231,
+    16.7783275,
+    16.7783275
+  ],
+  "damping": [
+    6.30880185,
+    6.30880185,
+    2.55788977,
+    6.30880185,
+    1.81444569,
+    1.81444569,
+    6.30880185,
+    6.30880185,
+    2.55788977,
+    6.30880185,
+    1.81444569,
+    1.81444569,
+    2.55788977,
+    1.81444569,
+    1.81444569,
+    0.907222843,
+    0.907222843,
+    0.907222843,
+    0.907222843,
+    0.907222843,
+    1.0681415,
+    1.0681415,
+    0.907222843,
+    0.907222843,
+    0.907222843,
+    0.907222843,
+    0.907222843,
+    1.0681415,
+    1.0681415
+  ],
+  "torque_limits": [
+    139,
+    139,
+    88,
+    139,
+    25,
+    25,
+    139,
+    139,
+    88,
+    139,
+    25,
+    25,
+    88,
+    25,
+    25,
+    25,
+    25,
+    25,
+    25,
+    25,
+    5,
+    5,
+    25,
+    25,
+    25,
+    25,
+    25,
+    5,
+    5
+  ],
+  "action_scale": [
+    0.350661466,
+    0.350661466,
+    0.547546465,
+    0.350661466,
+    0.219288657,
+    0.219288657,
+    0.350661466,
+    0.350661466,
+    0.547546465,
+    0.350661466,
+    0.219288657,
+    0.219288657,
+    0.547546465,
+    0.219288657,
+    0.219288657,
+    0.438577314,
+    0.438577314,
+    0.438577314,
+    0.438577314,
+    0.438577314,
+    0.0745008703,
+    0.0745008703,
+    0.438577314,
+    0.438577314,
+    0.438577314,
+    0.438577314,
+    0.438577314,
+    0.0745008703,
+    0.0745008703
+  ],
+  "action_clip": 10,
+  "control_dt": 0.02,
+  "physics_options": {
+    "timestep": 0.002,
+    "solver": "PGS",
+    "geom_friction": {
+      "floor": [
+        1.6,
+        0.005,
+        0.0001
+      ]
+    }
+  },
+  "onnx": {
+    "encoder": {
+      "path": "./model_encoder.onnx",
+      "meta": {
+        "in_keys": [
+          "obs_dict"
+        ],
+        "out_keys": [
+          "encoded_tokens"
+        ],
+        "in_shapes": [
+          [
+            1,
+            1762
+          ]
+        ],
+        "out_shapes": [
+          [
+            1,
+            64
+          ]
+        ]
+      }
+    },
+    "decoder": {
+      "path": "./model_decoder.onnx",
+      "meta": {
+        "in_keys": [
+          "obs_dict"
+        ],
+        "out_keys": [
+          "action"
+        ],
+        "in_shapes": [
+          [
+            1,
+            994
+          ]
+        ],
+        "out_shapes": [
+          [
+            1,
+            29
+          ]
+        ]
+      }
+    },
+    "planner": {
+      "enabled": false,
+      "path": "./planner_sonic.onnx",
+      "meta": {
+        "in_keys": [
+          "context_mujoco_qpos",
+          "target_vel",
+          "mode",
+          "movement_direction",
+          "facing_direction",
+          "random_seed",
+          "has_specific_target",
+          "specific_target_positions",
+          "specific_target_headings",
+          "allowed_pred_num_tokens",
+          "height"
+        ],
+        "out_keys": [
+          "mujoco_qpos",
+          "num_pred_frames"
+        ]
+      }
+    }
+  },
+  "sonic": {
+    "encoder_mode": 0,
+    "token_dim": 64,
+    "encoder_input_dim": 1762,
+    "decoder_input_dim": 994,
+    "proprio_history_frames": 10,
+    "motion_future_frames": 10,
+    "motion_step": 5
+  }
+}

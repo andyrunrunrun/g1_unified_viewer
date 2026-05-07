@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import pickle
 import re
 import uuid
@@ -83,6 +84,42 @@ def _xyzw_to_wxyz(quat: np.ndarray) -> np.ndarray:
     if quat.ndim == 1:
         return quat[[3, 0, 1, 2]]
     return quat[:, [3, 0, 1, 2]]
+
+
+def _normalize_quaternions(quat: np.ndarray) -> np.ndarray:
+    quat = np.asarray(quat, dtype=float)
+    norm = np.linalg.norm(quat, axis=1, keepdims=True)
+    norm = np.maximum(norm, 1e-9)
+    return quat / norm
+
+
+def _xyzw_roll_pitch_score(quat_xyzw: np.ndarray) -> float:
+    quat_xyzw = _normalize_quaternions(quat_xyzw)
+    x = quat_xyzw[:, 0]
+    y = quat_xyzw[:, 1]
+    z = quat_xyzw[:, 2]
+    w = quat_xyzw[:, 3]
+    sin_roll = 2.0 * (w * x + y * z)
+    cos_roll = 1.0 - 2.0 * (x * x + y * y)
+    roll = np.arctan2(sin_roll, cos_roll)
+    sin_pitch = np.clip(2.0 * (w * y - z * x), -1.0, 1.0)
+    pitch = np.arcsin(sin_pitch)
+    return float(np.mean(np.abs(roll)) + np.mean(np.abs(pitch)))
+
+
+def _detect_quat_order_xyzw_or_wxyz(root_rotation: np.ndarray, max_frames: int = 200) -> tuple[str, dict[str, float]]:
+    root_rotation = np.asarray(root_rotation, dtype=float)
+    if root_rotation.ndim != 2 or root_rotation.shape[1] != 4:
+        raise ValueError(f"root_rotation must be shaped (T, 4), got {root_rotation.shape}")
+    if root_rotation.shape[0] == 0:
+        return "xyzw", {"xyzw": 0.0, "wxyz": math.inf}
+    sample = root_rotation[: min(max_frames, root_rotation.shape[0])]
+    xyzw_score = _xyzw_roll_pitch_score(sample)
+    wxyz_score = _xyzw_roll_pitch_score(sample[:, [1, 2, 3, 0]])
+    return (
+        "xyzw" if xyzw_score <= wxyz_score else "wxyz",
+        {"xyzw": xyzw_score, "wxyz": wxyz_score},
+    )
 
 
 def _axis_angle_to_wxyz(axis_angle: np.ndarray) -> np.ndarray:
@@ -312,6 +349,8 @@ class Twist2Importer(DatasetImporter):
         if root_translation is not None:
             root_translation = np.asarray(root_translation, dtype=float)
 
+        root_rotation_order: str | None = None
+        root_rotation_scores: dict[str, float] | None = None
         root_rotation = self._first_array(
             payload,
             ("root_rot", "root_rotation", "root_quat", "base_quat"),
@@ -322,8 +361,13 @@ class Twist2Importer(DatasetImporter):
                 root_rotation = root_rotation[None, :]
             if root_rotation.shape[1] == 3:
                 root_rotation = _axis_angle_to_wxyz(root_rotation)
-            elif "root_pos" in payload or "dof_pos" in payload:
-                root_rotation = _xyzw_to_wxyz(root_rotation)
+                root_rotation_order = "axis_angle"
+            elif root_rotation.shape[1] == 4:
+                root_rotation_order, root_rotation_scores = _detect_quat_order_xyzw_or_wxyz(root_rotation)
+                if root_rotation_order == "wxyz":
+                    root_rotation = _normalize_quaternions(root_rotation)
+                else:
+                    root_rotation = _xyzw_to_wxyz(_normalize_quaternions(root_rotation))
         body_positions = self._first_array(payload, ("local_body_pos", "body_pos_w", "body_positions"))
         if body_positions is not None:
             body_positions = np.asarray(body_positions, dtype=float)
@@ -347,6 +391,11 @@ class Twist2Importer(DatasetImporter):
             "keys": sorted(payload.keys()),
             "original_suffix": path.suffix.lower(),
         }
+        if root_rotation_order:
+            metadata["root_rot_order"] = root_rotation_order
+        if root_rotation_scores:
+            metadata["root_rot_order_score_xyzw"] = root_rotation_scores["xyzw"]
+            metadata["root_rot_order_score_wxyz"] = root_rotation_scores["wxyz"]
         return _sequence_from_arrays(
             name=path.stem,
             source_format="twist2",
@@ -456,4 +505,3 @@ def load_sequence(path_str: str, format_hint: str | None = None) -> StateSequenc
         if importer.can_handle(path):
             return importer.load(path)
     raise ValueError(f"Unable to determine importer for path: {path}")
-

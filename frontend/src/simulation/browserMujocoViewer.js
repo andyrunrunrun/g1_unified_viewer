@@ -7,6 +7,34 @@ export const RENDERER_OPTIONS = Object.freeze({ antialias: true });
 export const VIEWER_PIXEL_RATIO_LIMIT = 1.5;
 export const VIEWER_SHADOWS_ENABLED = true;
 export const RENDER_THROTTLE_MS = 30;
+const DRAG_FORCE_SCALE = 60.0;
+const DRAG_FORCE_MAX = 30.0;
+const DRAG_FORCE_ARROW_COLOR = 0xffc857;
+const CONTACT_FORCE_ARROW_SCALE = 0.01;
+const CONTACT_FORCE_ARROW_MAX = 0.55;
+const CONTACT_ARROW_COLOR_LEFT = 0x58c08d;
+const CONTACT_ARROW_COLOR_RIGHT = 0x6ea8c7;
+const CONTACT_ARROW_COLOR_OTHER = 0xd0a257;
+const REFERENCE_OVERLAY_COLOR = 0x7bd3ee;
+const REFERENCE_OVERLAY_OPACITY = 0.26;
+const RELATIVE_REFERENCE_OVERLAY_COLOR = 0xf2c86b;
+const RELATIVE_REFERENCE_OVERLAY_OPACITY = 0.22;
+const CAMERA_PRESET_DISTANCE = 3.2;
+const CAMERA_PRESET_HEIGHT = 1.45;
+const CAMERA_TOP_HEIGHT_OFFSET = 4.5;
+
+const REFERENCE_OVERLAY_STYLES = Object.freeze({
+  global: {
+    color: REFERENCE_OVERLAY_COLOR,
+    opacity: REFERENCE_OVERLAY_OPACITY,
+    name: 'Global Reference Motion Ghost'
+  },
+  relative: {
+    color: RELATIVE_REFERENCE_OVERLAY_COLOR,
+    opacity: RELATIVE_REFERENCE_OVERLAY_OPACITY,
+    name: 'Relative Reference Motion Ghost'
+  }
+});
 
 function ensureDirectory(mujoco, path) {
   if (!mujoco.FS.analyzePath(path).exists) {
@@ -78,6 +106,34 @@ function threeVectorToMujoco(values) {
   ];
 }
 
+function mujocoVectorToThree(values, target = new THREE.Vector3()) {
+  const read = (index) => Number(values?.[index] ?? values?.get?.(index) ?? 0);
+  return target.set(read(0), read(2), -read(1));
+}
+
+function makeDragForceState() {
+  return {
+    active: false,
+    bodyId: null,
+    bodyName: null,
+    physicsObject: null,
+    grabDistance: 0,
+    previousControlsEnabled: true,
+    localHit: new THREE.Vector3(),
+    worldHit: new THREE.Vector3(),
+    currentWorld: new THREE.Vector3(),
+    force: [0, 0, 0]
+  };
+}
+
+function clampVectorLength(vector, maxLength) {
+  const length = vector.length();
+  if (length > maxLength && length > 0) {
+    vector.multiplyScalar(maxLength / length);
+  }
+  return vector;
+}
+
 export function hasBodyPositionTrack(payload) {
   const bodyNames = payload?.body_names;
   const bodyPositions = payload?.state?.body_positions;
@@ -96,7 +152,8 @@ export function hasJointPositionTrack(payload) {
     && jointPositions.length >= jointNames.length;
 }
 
-function createSimulationWrapper(mujoco, model, data) {
+function createSimulationWrapper(mujoco, model, data, options = {}) {
+  const ownsModel = options.ownsModel !== false;
   const force = new Float64Array(3);
   const torque = new Float64Array(3);
   const point = new Float64Array(3);
@@ -151,8 +208,10 @@ function createSimulationWrapper(mujoco, model, data) {
       mujoco.mj_applyFT(model, data, force, torque, point, bodyId, data.qfrc_applied);
     },
     free() {
-      data.delete();
-      model.delete();
+      data?.delete?.();
+      if (ownsModel) {
+        model?.delete?.();
+      }
     }
   };
 }
@@ -319,6 +378,306 @@ function zeroArray(values) {
   for (let index = 0; index < values.length; index += 1) {
     values[index] = 0;
   }
+}
+
+function writePayloadToSimulation(simulation, payload, jointAddressByName = new Map()) {
+  if (!simulation || !payload?.state) {
+    return false;
+  }
+  return writePayloadToQpos(simulation.qpos, payload, jointAddressByName);
+}
+
+function writePayloadToQpos(qpos, payload, jointAddressByName = new Map()) {
+  if (!qpos || !payload?.state) {
+    return false;
+  }
+  const state = payload.state;
+  const root = state.root_translation || [0, 0, 0.78];
+  const quat = state.root_rotation_wxyz || [1, 0, 0, 0];
+  qpos[0] = root[0] ?? 0;
+  qpos[1] = root[1] ?? 0;
+  qpos[2] = root[2] ?? 0.78;
+  qpos[3] = quat[0] ?? 1;
+  qpos[4] = quat[1] ?? 0;
+  qpos[5] = quat[2] ?? 0;
+  qpos[6] = quat[3] ?? 0;
+
+  const names = payload.joint_names || [];
+  const values = payload.state.joint_positions || [];
+  for (let index = 0; index < names.length; index += 1) {
+    const address = jointAddressByName.get(names[index]);
+    if (address !== undefined && address < qpos.length) {
+      qpos[address] = Number(values[index] ?? 0);
+    }
+  }
+  return true;
+}
+
+function applyPdControlStep({
+  simulation,
+  model,
+  jointNames = [],
+  targets = [],
+  kp = [],
+  kd = [],
+  torqueLimits = [],
+  jointAddressByName = new Map(),
+  jointVelocityAddressByName = new Map(),
+  actuatorAddressByJointName = new Map(),
+  defaultKp = 35,
+  defaultKd = 1.5
+}) {
+  const count = Math.min(jointNames.length, targets.length);
+  for (let index = 0; index < count; index += 1) {
+    const jointName = jointNames[index];
+    const qposAddress = jointAddressByName?.get(jointName) ?? 7 + index;
+    const qvelAddress = jointVelocityAddressByName?.get(jointName) ?? 6 + index;
+    const ctrlAddress = actuatorAddressByJointName?.get(jointName) ?? index;
+    if (
+      qposAddress >= simulation.qpos.length
+      || qvelAddress >= simulation.qvel.length
+      || ctrlAddress >= (simulation.ctrl?.length ?? 0)
+    ) {
+      continue;
+    }
+    const stiffness = Number(kp[index] ?? defaultKp);
+    const damping = Number(kd[index] ?? defaultKd);
+    const torque = stiffness * (Number(targets[index] ?? 0) - simulation.qpos[qposAddress])
+      - damping * simulation.qvel[qvelAddress];
+    simulation.ctrl[ctrlAddress] = clampControl(
+      model,
+      ctrlAddress,
+      clampSymmetricLimit(torque, torqueLimits[index])
+    );
+  }
+}
+
+function readSimulationState({
+  simulation,
+  jointNames = [],
+  jointNamesMJC = [],
+  jointAddressByName = new Map(),
+  jointVelocityAddressByName = new Map()
+} = {}) {
+  const qpos = simulation?.qpos;
+  const qvel = simulation?.qvel;
+  if (!qpos || !qvel) {
+    return null;
+  }
+  const names = jointNames.length ? jointNames : (jointNamesMJC || []);
+  const jointPositions = [];
+  const jointVelocities = [];
+  for (let index = 0; index < names.length; index += 1) {
+    const qposAddress = jointAddressByName?.get(names[index]) ?? 7 + index;
+    const qvelAddress = jointVelocityAddressByName?.get(names[index]) ?? 6 + index;
+    jointPositions.push(Number(qpos[qposAddress] ?? 0));
+    jointVelocities.push(Number(qvel[qvelAddress] ?? 0));
+  }
+  return {
+    timestamp: (globalThis.performance?.now?.() ?? Date.now()) / 1000,
+    root_translation: [Number(qpos[0] ?? 0), Number(qpos[1] ?? 0), Number(qpos[2] ?? 0.78)],
+    root_rotation_wxyz: [Number(qpos[3] ?? 1), Number(qpos[4] ?? 0), Number(qpos[5] ?? 0), Number(qpos[6] ?? 0)],
+    root_linear_velocity: [Number(qvel[0] ?? 0), Number(qvel[1] ?? 0), Number(qvel[2] ?? 0)],
+    root_angular_velocity: [Number(qvel[3] ?? 0), Number(qvel[4] ?? 0), Number(qvel[5] ?? 0)],
+    joint_positions: jointPositions,
+    joint_velocities: jointVelocities
+  };
+}
+
+function physicsDecimationForModel(model, targetControlDt = 0.02) {
+  const timestep = Number(model?.opt?.timestep ?? 0);
+  if (!Number.isFinite(timestep) || timestep <= 0) {
+    return 1;
+  }
+  return Math.max(1, Math.round(Number(targetControlDt) / timestep));
+}
+
+function roundVector(vector, digits = 6) {
+  vector.set(
+    Number(vector.x.toFixed(digits)),
+    Number(vector.y.toFixed(digits)),
+    Number(vector.z.toFixed(digits))
+  );
+  return vector;
+}
+
+function classifyFootSide(bodyNames = []) {
+  const names = bodyNames.map((name) => String(name || '').toLowerCase());
+  const isFootName = (name) => /(ankle|foot|sole|toe)/.test(name);
+  if (names.some((name) => name.includes('left') && isFootName(name))) {
+    return 'left';
+  }
+  if (names.some((name) => name.includes('right') && isFootName(name))) {
+    return 'right';
+  }
+  return 'other';
+}
+
+function emptyFootContact() {
+  return {
+    active: false,
+    normalForce: 0,
+    tangentForce: 0,
+    pointCount: 0,
+    slipping: false
+  };
+}
+
+function createContactForceBuffer(mujoco) {
+  if (typeof mujoco?.DoubleBuffer !== 'function') {
+    return null;
+  }
+  try {
+    return new mujoco.DoubleBuffer(6);
+  } catch {
+    return null;
+  }
+}
+
+function contactForceBufferView(buffer) {
+  const view = buffer?.GetView?.();
+  return view && typeof view.length === 'number' ? view : null;
+}
+
+function readContactForceInto({ mujoco, model, data, index, target, buffer = null } = {}) {
+  zeroArray(target);
+  if (typeof mujoco?.mj_contactForce !== 'function') {
+    return target;
+  }
+
+  const bufferView = contactForceBufferView(buffer);
+  if (buffer && bufferView) {
+    zeroArray(bufferView);
+    try {
+      mujoco.mj_contactForce(model, data, index, buffer);
+      for (let forceIndex = 0; forceIndex < target.length; forceIndex += 1) {
+        target[forceIndex] = Number(bufferView[forceIndex] ?? 0);
+      }
+      return target;
+    } catch {
+      zeroArray(target);
+    }
+  }
+
+  try {
+    mujoco.mj_contactForce(model, data, index, target);
+  } catch {
+    zeroArray(target);
+  }
+  return target;
+}
+
+function pushFootContact(summary, side, point) {
+  const target = side === 'left'
+    ? summary.leftFoot
+    : side === 'right'
+      ? summary.rightFoot
+      : null;
+  if (!target) {
+    return;
+  }
+  target.active = target.active || point.active;
+  target.normalForce += point.normalForce;
+  target.tangentForce += point.tangentForce;
+  target.pointCount += 1;
+  target.slipping = target.slipping || point.slipping;
+}
+
+function readContactSummaryFromData({ mujoco, model, data, bodyNames = [] } = {}) {
+  const contactCount = Math.max(0, Number(data?.ncon ?? 0));
+  const summary = {
+    count: contactCount,
+    leftFoot: emptyFootContact(),
+    rightFoot: emptyFootContact(),
+    points: []
+  };
+  if (!contactCount || !data?.contact || !model) {
+    return summary;
+  }
+
+  const force = new Float64Array(6);
+  const contactForceBuffer = createContactForceBuffer(mujoco);
+  const position = new THREE.Vector3();
+  try {
+    for (let index = 0; index < contactCount; index += 1) {
+      const contact = data.contact.get?.(index);
+      if (!contact) {
+        continue;
+      }
+      readContactForceInto({ mujoco, model, data, index, target: force, buffer: contactForceBuffer });
+      const geomIds = [Number(contact.geom1 ?? contact.geom?.[0] ?? -1), Number(contact.geom2 ?? contact.geom?.[1] ?? -1)];
+      const bodyIds = geomIds.map((geomId) => Number(model?.geom_bodyid?.[geomId] ?? -1));
+      const names = bodyIds.map((bodyId) => bodyNames?.[bodyId] || `body_${bodyId}`);
+      const normalForce = Math.max(0, Number(force[0] ?? 0));
+      const tangentForce = Math.hypot(Number(force[1] ?? 0), Number(force[2] ?? 0));
+      const side = classifyFootSide(names);
+      const friction = Math.max(
+        ...geomIds.map((geomId) => Number(model?.geom_friction?.[geomId * 3] ?? contact.friction?.[0] ?? 0)),
+        0
+      );
+      mujocoVectorToThree(contact.pos, position);
+      const point = {
+        index,
+        side,
+        active: normalForce > 1e-6,
+        normalForce,
+        tangentForce,
+        slipping: normalForce > 1e-6 && friction > 0 && tangentForce > normalForce * friction * 0.85,
+        position: [position.x, position.y, position.z],
+        geomIds,
+        bodyIds,
+        bodyNames: names
+      };
+      summary.points.push(point);
+      pushFootContact(summary, side, point);
+    }
+  } finally {
+    contactForceBuffer?.delete?.();
+  }
+  summary.count = summary.points.length;
+  return summary;
+}
+
+function applyPhysicsOptionsToModel({ mujoco, model, geomIdByName }, physicsOptions) {
+  const timestep = Number(physicsOptions.timestep);
+  if (Number.isFinite(timestep) && timestep > 0 && model.opt) {
+    model.opt.timestep = timestep;
+  }
+
+  const solver = resolveSolverValue(mujoco, physicsOptions.solver);
+  if (solver !== null && model.opt) {
+    model.opt.solver = solver;
+  }
+
+  for (const [name, values] of Object.entries(physicsOptions.geom_friction || {})) {
+    const geomId = geomIdByName?.get(name);
+    if (geomId === undefined || !model.geom_friction) {
+      continue;
+    }
+    const offset = geomId * 3;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const value = Number(values?.[axis]);
+      if (Number.isFinite(value) && offset + axis < model.geom_friction.length) {
+        model.geom_friction[offset + axis] = value;
+      }
+    }
+  }
+}
+
+function recordingMimeType(preferredType = null) {
+  const candidates = [
+    preferredType,
+    'video/mp4',
+    'video/mp4;codecs=avc1.42E01E',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ].filter(Boolean);
+  const recorder = globalThis.MediaRecorder;
+  if (!recorder?.isTypeSupported) {
+    return candidates[0] || 'video/webm';
+  }
+  return candidates.find((candidate) => recorder.isTypeSupported(candidate)) || 'video/webm';
 }
 
 function buildActuatorAddressByJointName(model, mujoco, jointNames) {
@@ -515,6 +874,16 @@ export class BrowserMujocoViewer {
     this.modelRoot = null;
     this.highDetailBodies = [];
     this.bodyTrackPositions = [];
+    this.referenceOverlayEnabled = false;
+    this.referenceOverlay = null;
+    this.referenceOverlayBodies = {};
+    this.referenceOverlayMaterials = [];
+    this.referenceOverlayQpos = null;
+    this.referenceOverlayXpos = null;
+    this.referenceOverlayXquat = null;
+    this.referenceOverlayData = null;
+    this.referenceBodyTrackPositions = [];
+    this.referenceOverlays = {};
     this.jointAddressByName = new Map();
     this.jointVelocityAddressByName = new Map();
     this.actuatorAddressByJointName = new Map();
@@ -533,6 +902,16 @@ export class BrowserMujocoViewer {
     this.renderRequested = false;
     this.lastRenderTime = 0;
     this.activeImpulse = null;
+    this.physicsInteractionEnabled = false;
+    this.dragForce = makeDragForceState();
+    this.contactMarkersEnabled = true;
+    this.contactMarkerGroup = new THREE.Group();
+    this.contactMarkerGroup.name = 'Contact Force Markers';
+    this.contactMarkerPool = [];
+    this.recording = null;
+    this.pointer = new THREE.Vector2();
+    this.raycaster = new THREE.Raycaster();
+    this.raycaster.params.Line.threshold = 0.1;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x263f59);
@@ -554,6 +933,28 @@ export class BrowserMujocoViewer {
     this.handleControlsChange = () => this.requestRender();
     this.controls.addEventListener('change', this.handleControlsChange);
     this.controls.update();
+
+    this.dragForceArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, 0),
+      1,
+      DRAG_FORCE_ARROW_COLOR
+    );
+    this.dragForceArrow.line.material.transparent = true;
+    this.dragForceArrow.cone.material.transparent = true;
+    this.dragForceArrow.line.material.opacity = 0.85;
+    this.dragForceArrow.cone.material.opacity = 0.85;
+    this.dragForceArrow.visible = false;
+    this.scene.add(this.dragForceArrow);
+    this.scene.add(this.contactMarkerGroup);
+
+    this.handlePointerDown = (event) => this.beginDragForce(event);
+    this.handlePointerMove = (event) => this.moveDragForce(event);
+    this.handlePointerUp = () => this.endDragForce();
+    this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown, true);
+    document.addEventListener('pointermove', this.handlePointerMove, true);
+    document.addEventListener('pointerup', this.handlePointerUp, true);
+    document.addEventListener('pointercancel', this.handlePointerUp, true);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
@@ -630,30 +1031,7 @@ export class BrowserMujocoViewer {
       return;
     }
     this.currentPhysicsOptionsSignature = signature;
-
-    const timestep = Number(physicsOptions.timestep);
-    if (Number.isFinite(timestep) && timestep > 0 && this.model.opt) {
-      this.model.opt.timestep = timestep;
-    }
-
-    const solver = resolveSolverValue(this.mujoco, physicsOptions.solver);
-    if (solver !== null && this.model.opt) {
-      this.model.opt.solver = solver;
-    }
-
-    for (const [name, values] of Object.entries(physicsOptions.geom_friction || {})) {
-      const geomId = this.geomIdByName?.get(name);
-      if (geomId === undefined || !this.model.geom_friction) {
-        continue;
-      }
-      const offset = geomId * 3;
-      for (let axis = 0; axis < 3; axis += 1) {
-        const value = Number(values?.[axis]);
-        if (Number.isFinite(value) && offset + axis < this.model.geom_friction.length) {
-          this.model.geom_friction[offset + axis] = value;
-        }
-      }
-    }
+    applyPhysicsOptionsToModel(this, physicsOptions);
   }
 
   applyState(payload) {
@@ -665,26 +1043,7 @@ export class BrowserMujocoViewer {
       return;
     }
     this.lastFrameKey = frameKey;
-    const qpos = this.simulation.qpos;
-    const state = payload.state;
-    const root = state.root_translation || [0, 0, 0.78];
-    const quat = state.root_rotation_wxyz || [1, 0, 0, 0];
-    qpos[0] = root[0] ?? 0;
-    qpos[1] = root[1] ?? 0;
-    qpos[2] = root[2] ?? 0.78;
-    qpos[3] = quat[0] ?? 1;
-    qpos[4] = quat[1] ?? 0;
-    qpos[5] = quat[2] ?? 0;
-    qpos[6] = quat[3] ?? 0;
-
-    const names = payload.joint_names || [];
-    const values = state.joint_positions || [];
-    for (let index = 0; index < names.length; index += 1) {
-      const address = this.jointAddressByName.get(names[index]);
-      if (address !== undefined && address < qpos.length) {
-        qpos[address] = Number(values[index] ?? 0);
-      }
-    }
+    writePayloadToSimulation(this.simulation, payload, this.jointAddressByName);
     if (hasJointPositionTrack(payload) || !hasBodyPositionTrack(payload) || !this.canApplyNamedBodyTrack(payload)) {
       this.setHighDetailVisible(true);
       this.simulation.forward();
@@ -694,6 +1053,237 @@ export class BrowserMujocoViewer {
       this.syncBodyPositionTrack(payload);
     }
     this.requestRender();
+  }
+
+  normalizeReferenceOverlayKey(key = 'global') {
+    return key === 'relative' ? 'relative' : 'global';
+  }
+
+  referenceOverlayStyle(key = 'global') {
+    return REFERENCE_OVERLAY_STYLES[this.normalizeReferenceOverlayKey(key)] || REFERENCE_OVERLAY_STYLES.global;
+  }
+
+  ensureReferenceOverlay(key = 'global') {
+    const overlayKey = this.normalizeReferenceOverlayKey(key);
+    if (!this.referenceOverlays) {
+      this.referenceOverlays = {};
+    }
+    if (this.referenceOverlays?.[overlayKey]?.group || !this.modelRoot || !this.model) {
+      return this.referenceOverlays?.[overlayKey]?.group || null;
+    }
+    const style = this.referenceOverlayStyle(overlayKey);
+    const overlay = new THREE.Group();
+    overlay.name = style.name;
+    overlay.visible = false;
+    const bodies = {};
+    const materials = [];
+
+    for (let bodyId = 0; bodyId < this.model.nbody; bodyId += 1) {
+      const sourceBody = this.bodies?.[bodyId];
+      const ghostBody = new THREE.Group();
+      ghostBody.name = `${overlayKey}_reference_${sourceBody?.name || this.bodyNames?.[bodyId] || `body_${bodyId}`}`;
+      ghostBody.bodyID = bodyId;
+      ghostBody.visible = bodyId > 0;
+      bodies[bodyId] = ghostBody;
+      if (bodyId === 0) {
+        overlay.add(ghostBody);
+      } else {
+        overlay.add(ghostBody);
+      }
+
+      sourceBody?.traverse?.((child) => {
+        if (!child.isMesh || child.isReflector) {
+          return;
+        }
+        const material = new THREE.MeshBasicMaterial({
+          color: style.color,
+          transparent: true,
+          opacity: style.opacity,
+          depthWrite: false
+        });
+        const mesh = new THREE.Mesh(child.geometry, material);
+        mesh.position.copy(child.position);
+        mesh.quaternion.copy(child.quaternion);
+        mesh.scale.copy(child.scale);
+        mesh.renderOrder = 4;
+        ghostBody.add(mesh);
+        materials.push(material);
+      });
+    }
+
+    this.referenceOverlays[overlayKey] = {
+      group: overlay,
+      bodies,
+      materials,
+      qpos: null,
+      xpos: null,
+      xquat: null,
+      data: null,
+      bodyTrackPositions: []
+    };
+    if (overlayKey === 'global') {
+      this.referenceOverlay = overlay;
+      this.referenceOverlayBodies = bodies;
+      this.referenceOverlayMaterials = materials;
+    }
+    this.modelRoot.add(overlay);
+    return overlay;
+  }
+
+  setReferenceOverlayEnabled(enabled, key = 'global') {
+    const overlayKey = this.normalizeReferenceOverlayKey(key);
+    const nextEnabled = Boolean(enabled);
+    if (overlayKey === 'global') {
+      this.referenceOverlayEnabled = nextEnabled;
+    }
+    const overlay = this.ensureReferenceOverlay(overlayKey);
+    const record = this.referenceOverlays?.[overlayKey];
+    if (record) {
+      record.enabled = nextEnabled;
+    }
+    if (overlay) {
+      overlay.visible = nextEnabled;
+      this.requestRender?.();
+    }
+  }
+
+  updateReferenceOverlay(payload, key = 'global') {
+    const overlayKey = this.normalizeReferenceOverlayKey(key);
+    const record = this.referenceOverlays?.[overlayKey];
+    const enabled = overlayKey === 'global'
+      ? this.referenceOverlayEnabled
+      : record?.enabled;
+    if (!enabled || !payload?.state) {
+      return false;
+    }
+    const overlay = this.ensureReferenceOverlay(overlayKey);
+    if (!overlay) {
+      return false;
+    }
+    overlay.visible = true;
+    if (hasJointPositionTrack(payload) || !hasBodyPositionTrack(payload) || !this.canApplyNamedReferenceBodyTrack(payload)) {
+      this.updateReferenceOverlayFromJoints(payload, overlayKey);
+    } else {
+      this.syncReferenceBodyPositionTrack(payload, overlayKey);
+    }
+    this.requestRender?.();
+    return true;
+  }
+
+  updateReferenceOverlayFromJoints(payload, key = 'global') {
+    if (!this.model) {
+      return;
+    }
+    const overlayKey = this.normalizeReferenceOverlayKey(key);
+    const record = this.referenceOverlays?.[overlayKey] || {};
+    if (this.mujoco?.MjData && !record.data) {
+      record.data = new this.mujoco.MjData(this.model);
+    }
+    const qpos = record.data?.qpos || record.qpos;
+    if (!qpos || qpos.length !== (this.simulation?.qpos?.length ?? this.model.nq ?? 0)) {
+      record.qpos = new Float64Array(this.simulation?.qpos?.length ?? this.model.nq ?? 0);
+    }
+    const targetQpos = record.data?.qpos || record.qpos;
+    writePayloadToQpos(targetQpos, payload, this.jointAddressByName);
+    this.referenceOverlays[overlayKey] = record;
+    if (record.data) {
+      this.mujoco.mj_forward(this.model, record.data);
+      this.syncReferenceOverlayBodies(record.data.xpos, record.data.xquat, overlayKey);
+      return;
+    }
+
+    const xpos = record.xpos || new Float64Array((this.model.nbody || 0) * 3);
+    const xquat = record.xquat || new Float64Array((this.model.nbody || 0) * 4);
+    record.xpos = xpos;
+    record.xquat = xquat;
+    this.writeFallbackReferenceRootPose(payload, xpos, xquat);
+    this.syncReferenceOverlayBodies(xpos, xquat, overlayKey);
+  }
+
+  writeFallbackReferenceRootPose(payload, xpos, xquat) {
+    const root = payload.state.root_translation || [0, 0, 0.78];
+    const quat = payload.state.root_rotation_wxyz || [1, 0, 0, 0];
+    for (let bodyId = 0; bodyId < this.model.nbody; bodyId += 1) {
+      xpos[bodyId * 3] = root[0] ?? 0;
+      xpos[bodyId * 3 + 1] = root[1] ?? 0;
+      xpos[bodyId * 3 + 2] = root[2] ?? 0.78;
+      xquat[bodyId * 4] = quat[0] ?? 1;
+      xquat[bodyId * 4 + 1] = quat[1] ?? 0;
+      xquat[bodyId * 4 + 2] = quat[2] ?? 0;
+      xquat[bodyId * 4 + 3] = quat[3] ?? 0;
+    }
+  }
+
+  syncReferenceOverlayBodies(xpos, xquat, key = 'global') {
+    const overlayKey = this.normalizeReferenceOverlayKey(key);
+    const bodies = this.referenceOverlays?.[overlayKey]?.bodies || this.referenceOverlayBodies;
+    for (let bodyId = 0; bodyId < this.model.nbody; bodyId += 1) {
+      const body = bodies?.[bodyId];
+      if (!body) {
+        continue;
+      }
+      getPosition(xpos, bodyId, body.position);
+      getQuaternion(xquat, bodyId, body.quaternion);
+      body.updateWorldMatrix?.();
+    }
+  }
+
+  canApplyNamedReferenceBodyTrack(payload) {
+    if (arrayIsZeroFilled(payload?.state?.body_positions)) {
+      return false;
+    }
+    return payload.body_names?.some((bodyName) => this.bodyIdByName?.has(bodyName));
+  }
+
+  syncReferenceBodyPositionTrack(payload, key = 'global') {
+    const overlayKey = this.normalizeReferenceOverlayKey(key);
+    const record = this.referenceOverlays?.[overlayKey] || {};
+    const state = payload.state;
+    const root = new THREE.Vector3();
+    const rootQuaternion = new THREE.Quaternion();
+    setSwizzledPosition(root, state.root_translation || [0, 0, 0.78]);
+    setSwizzledQuaternion(rootQuaternion, state.root_rotation_wxyz || [1, 0, 0, 0]);
+
+    const bodyPositions = state.body_positions || [];
+    const bodyRotations = state.body_rotations_wxyz || [];
+    if (!record.bodyTrackPositions) {
+      record.bodyTrackPositions = [];
+    }
+    const tempPosition = new THREE.Vector3();
+    const tempQuaternion = new THREE.Quaternion();
+    for (let trackIndex = 0; trackIndex < bodyPositions.length; trackIndex += 1) {
+      const bodyName = payload.body_names[trackIndex];
+      const bodyId = this.bodyIdByName?.get(bodyName);
+      const body = record.bodies?.[bodyId] || this.referenceOverlayBodies?.[bodyId];
+      const position = bodyPositions[trackIndex];
+      if (!position) {
+        continue;
+      }
+      setSwizzledPosition(tempPosition, position);
+      tempPosition.applyQuaternion(rootQuaternion).add(root);
+      if (!record.bodyTrackPositions[trackIndex]) {
+        record.bodyTrackPositions[trackIndex] = new THREE.Vector3();
+      }
+      record.bodyTrackPositions[trackIndex].copy(tempPosition);
+
+      if (!body) {
+        continue;
+      }
+      body.position.copy(tempPosition);
+
+      const rotation = bodyRotations[trackIndex];
+      if (rotation) {
+        setSwizzledQuaternion(tempQuaternion, rotation);
+        body.quaternion.copy(rootQuaternion).multiply(tempQuaternion);
+      } else if (trackIndex === 0) {
+        body.quaternion.copy(rootQuaternion);
+      }
+      body.updateWorldMatrix?.();
+    }
+    this.referenceOverlays[overlayKey] = record;
+    if (overlayKey === 'global') {
+      this.referenceBodyTrackPositions = record.bodyTrackPositions;
+    }
   }
 
   resetPhysics(payload) {
@@ -715,6 +1305,7 @@ export class BrowserMujocoViewer {
     zeroArray(this.simulation.ctrl);
     zeroArray(this.simulation.qfrc_applied);
     this.activeImpulse = null;
+    this.endDragForce();
   }
 
   stepPhysics(options = {}) {
@@ -729,35 +1320,28 @@ export class BrowserMujocoViewer {
     const kd = options.kd || [];
     const torqueLimits = options.torque_limits || [];
     const now = Number(options.now ?? performance.now());
+    this.setPhysicsInteractionEnabled(true);
 
     for (let step = 0; step < steps; step += 1) {
       zeroArray(this.simulation.ctrl);
       zeroArray(this.simulation.qfrc_applied);
       this.applyActiveImpulse(now);
+      this.applyDragForce();
 
-      const count = Math.min(jointNames.length, targets.length);
-      for (let index = 0; index < count; index += 1) {
-        const jointName = jointNames[index];
-        const qposAddress = this.jointAddressByName?.get(jointName) ?? 7 + index;
-        const qvelAddress = this.jointVelocityAddressByName?.get(jointName) ?? 6 + index;
-        const ctrlAddress = this.actuatorAddressByJointName?.get(jointName) ?? index;
-        if (
-          qposAddress >= this.simulation.qpos.length
-          || qvelAddress >= this.simulation.qvel.length
-          || ctrlAddress >= (this.simulation.ctrl?.length ?? 0)
-        ) {
-          continue;
-        }
-        const stiffness = Number(kp[index] ?? options.defaultKp ?? 35);
-        const damping = Number(kd[index] ?? options.defaultKd ?? 1.5);
-        const torque = stiffness * (Number(targets[index] ?? 0) - this.simulation.qpos[qposAddress])
-          - damping * this.simulation.qvel[qvelAddress];
-        this.simulation.ctrl[ctrlAddress] = clampControl(
-          this.model,
-          ctrlAddress,
-          clampSymmetricLimit(torque, torqueLimits[index])
-        );
-      }
+      applyPdControlStep({
+        simulation: this.simulation,
+        model: this.model,
+        jointNames,
+        targets,
+        kp,
+        kd,
+        torqueLimits,
+        jointAddressByName: this.jointAddressByName,
+        jointVelocityAddressByName: this.jointVelocityAddressByName,
+        actuatorAddressByJointName: this.actuatorAddressByJointName,
+        defaultKp: options.defaultKp ?? 35,
+        defaultKd: options.defaultKd ?? 1.5
+      });
 
       this.simulation.step();
     }
@@ -768,38 +1352,200 @@ export class BrowserMujocoViewer {
     return this.readState(jointNames);
   }
 
-  getPhysicsDecimation(targetControlDt = 0.02) {
-    const timestep = Number(this.model?.opt?.timestep ?? 0);
-    if (!Number.isFinite(timestep) || timestep <= 0) {
-      return 1;
+  setPhysicsInteractionEnabled(enabled) {
+    this.physicsInteractionEnabled = Boolean(enabled);
+    if (!this.physicsInteractionEnabled) {
+      this.endDragForce();
     }
-    return Math.max(1, Math.round(Number(targetControlDt) / timestep));
+  }
+
+  updatePointerRay(clientX, clientY) {
+    const rect = this.renderer?.domElement?.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) {
+      return false;
+    }
+    this.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    return true;
+  }
+
+  pickDragBody(event) {
+    if (!this.updatePointerRay(event.clientX, event.clientY)) {
+      return null;
+    }
+    const intersects = this.raycaster.intersectObjects(this.modelRoot ? [this.modelRoot] : this.scene.children, true);
+    return intersects.find((intersect) => intersect.object?.bodyID !== undefined) || null;
+  }
+
+  beginDragForce(event) {
+    if (!this.physicsInteractionEnabled || !this.simulation) {
+      return;
+    }
+    const hit = this.pickDragBody(event);
+    if (!hit?.object || hit.object.bodyID === undefined || Number(hit.object.bodyID) <= 0) {
+      return;
+    }
+    event.preventDefault?.();
+    const bodyId = Number(hit.object.bodyID);
+    const body = this.bodies[bodyId];
+    this.dragForce.active = true;
+    this.dragForce.bodyId = bodyId;
+    this.dragForce.bodyName = body?.name || this.bodyNames?.[bodyId] || `body_${bodyId}`;
+    this.dragForce.physicsObject = hit.object;
+    this.dragForce.grabDistance = Number(hit.distance ?? 0);
+    this.dragForce.previousControlsEnabled = this.controls?.enabled !== false;
+    this.dragForce.worldHit.copy(hit.point);
+    this.dragForce.currentWorld.copy(hit.point);
+    this.dragForce.localHit.copy(hit.point);
+    if (body?.worldToLocal) {
+      body.worldToLocal(this.dragForce.localHit);
+    }
+    if (this.controls) {
+      this.controls.enabled = false;
+    }
+    this.setDragForceArrowVisible(true);
+    this.updateDragForceTarget(event.clientX, event.clientY);
+    this.requestRender();
+  }
+
+  moveDragForce(event) {
+    if (!this.dragForce?.active) {
+      return;
+    }
+    event.preventDefault?.();
+    this.updateDragForceTarget(event.clientX, event.clientY);
+    this.requestRender();
+  }
+
+  updateDragForceTarget(clientX, clientY) {
+    if (!this.dragForce?.active || !this.updatePointerRay(clientX, clientY)) {
+      return;
+    }
+    this.dragForce.currentWorld
+      .copy(this.raycaster.ray.origin)
+      .addScaledVector(this.raycaster.ray.direction, this.dragForce.grabDistance);
+    this.updateDragForceArrow();
+  }
+
+  endDragForce() {
+    if (!this.dragForce) {
+      return;
+    }
+    const restoreControls = this.dragForce.active && this.dragForce.previousControlsEnabled;
+    if (restoreControls && this.controls) {
+      this.controls.enabled = true;
+    }
+    this.dragForce.active = false;
+    this.dragForce.bodyId = null;
+    this.dragForce.bodyName = null;
+    this.dragForce.physicsObject = null;
+    this.dragForce.force = [0, 0, 0];
+    this.setDragForceArrowVisible(false);
+    this.requestRender?.();
+  }
+
+  setDragForceArrowVisible(visible) {
+    if (this.dragForceArrow) {
+      this.dragForceArrow.visible = Boolean(visible);
+    }
+  }
+
+  updateDragForceArrow() {
+    if (!this.dragForceArrow || !this.dragForce?.active) {
+      return;
+    }
+    const offset = new THREE.Vector3().subVectors(this.dragForce.currentWorld, this.dragForce.worldHit);
+    const length = offset.length();
+    this.dragForceArrow.position.copy(this.dragForce.worldHit);
+    if (length > 1e-6) {
+      this.dragForceArrow.setDirection(offset.normalize());
+      this.dragForceArrow.setLength(length);
+    } else {
+      this.dragForceArrow.setLength(0.001);
+    }
+  }
+
+  getPhysicsDecimation(targetControlDt = 0.02) {
+    return physicsDecimationForModel(this.model, targetControlDt);
   }
 
   readState(jointNames = this.jointNamesMJC || []) {
-    const qpos = this.simulation?.qpos;
-    const qvel = this.simulation?.qvel;
-    if (!qpos || !qvel) {
-      return null;
+    return readSimulationState({
+      simulation: this.simulation,
+      jointNames,
+      jointNamesMJC: this.jointNamesMJC,
+      jointAddressByName: this.jointAddressByName,
+      jointVelocityAddressByName: this.jointVelocityAddressByName
+    });
+  }
+
+  readContactSummary() {
+    const summary = readContactSummaryFromData({
+      mujoco: this.mujoco,
+      model: this.model,
+      data: this.data,
+      bodyNames: this.bodyNames
+    });
+    if (this.contactMarkersEnabled !== false) {
+      this.setContactMarkers(summary);
     }
-    const names = jointNames.length ? jointNames : (this.jointNamesMJC || []);
-    const jointPositions = [];
-    const jointVelocities = [];
-    for (let index = 0; index < names.length; index += 1) {
-      const qposAddress = this.jointAddressByName?.get(names[index]) ?? 7 + index;
-      const qvelAddress = this.jointVelocityAddressByName?.get(names[index]) ?? 6 + index;
-      jointPositions.push(Number(qpos[qposAddress] ?? 0));
-      jointVelocities.push(Number(qvel[qvelAddress] ?? 0));
+    return summary;
+  }
+
+  setContactMarkersEnabled(enabled) {
+    this.contactMarkersEnabled = Boolean(enabled);
+    if (this.contactMarkerGroup) {
+      this.contactMarkerGroup.visible = this.contactMarkersEnabled;
     }
-    return {
-      timestamp: performance.now() / 1000,
-      root_translation: [Number(qpos[0] ?? 0), Number(qpos[1] ?? 0), Number(qpos[2] ?? 0.78)],
-      root_rotation_wxyz: [Number(qpos[3] ?? 1), Number(qpos[4] ?? 0), Number(qpos[5] ?? 0), Number(qpos[6] ?? 0)],
-      root_linear_velocity: [Number(qvel[0] ?? 0), Number(qvel[1] ?? 0), Number(qvel[2] ?? 0)],
-      root_angular_velocity: [Number(qvel[3] ?? 0), Number(qvel[4] ?? 0), Number(qvel[5] ?? 0)],
-      joint_positions: jointPositions,
-      joint_velocities: jointVelocities
-    };
+    if (!this.contactMarkersEnabled) {
+      for (const marker of this.contactMarkerPool || []) {
+        marker.visible = false;
+      }
+      this.requestRender?.();
+    }
+  }
+
+  setContactMarkers(summary = {}) {
+    if (!this.contactMarkerGroup) {
+      return;
+    }
+    const points = Array.isArray(summary.points) ? summary.points : [];
+    for (let index = this.contactMarkerPool.length; index < points.length; index += 1) {
+      const arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(0, 0, 0),
+        0.001,
+        CONTACT_ARROW_COLOR_OTHER
+      );
+      arrow.line.material.transparent = true;
+      arrow.cone.material.transparent = true;
+      arrow.line.material.opacity = 0.78;
+      arrow.cone.material.opacity = 0.86;
+      this.contactMarkerPool.push(arrow);
+      this.contactMarkerGroup.add(arrow);
+    }
+
+    for (let index = 0; index < this.contactMarkerPool.length; index += 1) {
+      const arrow = this.contactMarkerPool[index];
+      const point = points[index];
+      if (!point || !point.active) {
+        arrow.visible = false;
+        continue;
+      }
+      const color = point.side === 'left'
+        ? CONTACT_ARROW_COLOR_LEFT
+        : point.side === 'right'
+          ? CONTACT_ARROW_COLOR_RIGHT
+          : CONTACT_ARROW_COLOR_OTHER;
+      const length = Math.min(CONTACT_FORCE_ARROW_MAX, Math.max(0.035, point.normalForce * CONTACT_FORCE_ARROW_SCALE));
+      arrow.position.set(...point.position);
+      arrow.setColor(color);
+      arrow.setDirection(new THREE.Vector3(0, 1, 0));
+      arrow.setLength(length, Math.min(0.12, length * 0.36), Math.min(0.07, length * 0.18));
+      arrow.visible = true;
+    }
+    this.requestRender?.();
   }
 
   queueImpulse({ preset, magnitude = 80, duration = 0.15, bodyName = null } = {}) {
@@ -859,6 +1605,55 @@ export class BrowserMujocoViewer {
     );
   }
 
+  applyDragForce() {
+    if (!this.dragForce?.active || this.dragForce.bodyId === null || this.dragForce.bodyId === undefined) {
+      return;
+    }
+    const body = this.bodies[this.dragForce.bodyId];
+    if (!body) {
+      this.endDragForce();
+      return;
+    }
+    body.updateWorldMatrix?.(true, false);
+    this.dragForce.worldHit.copy(this.dragForce.localHit);
+    body.localToWorld?.(this.dragForce.worldHit);
+    const forceVector = new THREE.Vector3()
+      .subVectors(this.dragForce.currentWorld, this.dragForce.worldHit)
+      .multiplyScalar(DRAG_FORCE_SCALE);
+    clampVectorLength(forceVector, DRAG_FORCE_MAX);
+    this.dragForce.force = [forceVector.x, forceVector.y, forceVector.z];
+    const force = threeVectorToMujoco(forceVector);
+    const point = threeVectorToMujoco(this.dragForce.worldHit);
+    this.simulation.applyForce?.(
+      force[0],
+      force[1],
+      force[2],
+      0,
+      0,
+      0,
+      point[0],
+      point[1],
+      point[2],
+      this.dragForce.bodyId
+    );
+    this.updateDragForceArrow();
+  }
+
+  getDragForceState() {
+    return {
+      active: Boolean(this.dragForce?.active),
+      body_id: this.dragForce?.bodyId ?? null,
+      body_name: this.dragForce?.bodyName ?? null,
+      force: this.dragForce?.force || [0, 0, 0],
+      hit_point: this.dragForce?.worldHit
+        ? [this.dragForce.worldHit.x, this.dragForce.worldHit.y, this.dragForce.worldHit.z]
+        : null,
+      target_point: this.dragForce?.currentWorld
+        ? [this.dragForce.currentWorld.x, this.dragForce.currentWorld.y, this.dragForce.currentWorld.z]
+        : null
+    };
+  }
+
   canApplyNamedBodyTrack(payload) {
     if (arrayIsZeroFilled(payload?.state?.body_positions)) {
       return false;
@@ -912,6 +1707,56 @@ export class BrowserMujocoViewer {
     for (const body of this.highDetailBodies) {
       body.visible = visible;
     }
+  }
+
+  cameraPresetTarget() {
+    const body = this.bodies?.[this.followBodyId];
+    if (body?.position) {
+      return new THREE.Vector3(body.position.x, this.followHeight ?? 0.75, body.position.z);
+    }
+    return this.controls?.target?.clone?.() || new THREE.Vector3(0, this.followHeight ?? 0.75, 0);
+  }
+
+  setCameraFollowEnabled(enabled) {
+    this.followEnabled = Boolean(enabled);
+    this.followInitialized = false;
+    this.requestRender?.();
+    return true;
+  }
+
+  applyCameraPreset(preset = 'default') {
+    if (!this.camera || !this.controls) {
+      return false;
+    }
+
+    const normalizedPreset = preset === 'reset' ? 'default' : preset;
+    const target = normalizedPreset === 'default'
+      ? new THREE.Vector3(0, this.followHeight ?? 0.75, 0)
+      : this.cameraPresetTarget();
+    const cameraPosition = new THREE.Vector3();
+    if (normalizedPreset === 'front') {
+      cameraPosition.set(target.x + CAMERA_PRESET_DISTANCE, CAMERA_PRESET_HEIGHT, target.z);
+    } else if (normalizedPreset === 'side') {
+      cameraPosition.set(target.x, CAMERA_PRESET_HEIGHT, target.z + CAMERA_PRESET_DISTANCE);
+    } else if (normalizedPreset === 'back') {
+      cameraPosition.set(target.x - CAMERA_PRESET_DISTANCE, CAMERA_PRESET_HEIGHT, target.z);
+    } else if (normalizedPreset === 'top') {
+      cameraPosition.set(target.x, target.y + CAMERA_TOP_HEIGHT_OFFSET, target.z);
+    } else if (normalizedPreset === 'default') {
+      cameraPosition.set(3.0, 2.2, 3.0);
+      this.followInitialized = false;
+    } else {
+      return false;
+    }
+    roundVector(cameraPosition);
+
+    this.controls.target.copy(target);
+    this.camera.position.copy(cameraPosition);
+    this.camera.up?.set?.(0, 1, 0);
+    this.camera.lookAt?.(target);
+    this.controls.update?.();
+    this.requestRender?.();
+    return true;
   }
 
   updateCameraFollow() {
@@ -985,14 +1830,209 @@ export class BrowserMujocoViewer {
     this.renderer.render(this.scene, this.camera);
   }
 
+  startRecording({ fps = 30, mimeType = null } = {}) {
+    if (this.isRecording()) {
+      return false;
+    }
+    const canvas = this.renderer?.domElement;
+    if (!canvas?.captureStream || typeof globalThis.MediaRecorder !== 'function') {
+      throw new Error('Browser recording is not supported in this environment.');
+    }
+    const stream = canvas.captureStream(Math.max(1, Number(fps) || 30));
+    const selectedMimeType = recordingMimeType(mimeType);
+    const chunks = [];
+    const recorder = new globalThis.MediaRecorder(stream, { mimeType: selectedMimeType });
+    recorder.ondataavailable = (event) => {
+      if (event?.data && Number(event.data.size ?? 0) > 0) {
+        chunks.push(event.data);
+      }
+    };
+    this.recording = {
+      recorder,
+      stream,
+      chunks,
+      mimeType: selectedMimeType
+    };
+    recorder.start();
+    return true;
+  }
+
+  stopRecording() {
+    if (!this.recording) {
+      return Promise.resolve(null);
+    }
+    const recording = this.recording;
+    return new Promise((resolve) => {
+      recording.recorder.onstop = () => {
+        for (const track of recording.stream?.getTracks?.() || []) {
+          track.stop?.();
+        }
+        if (this.recording === recording) {
+          this.recording = null;
+        }
+        resolve(new Blob(recording.chunks, { type: recording.mimeType || 'video/mp4' }));
+      };
+      if (recording.recorder.state === 'inactive') {
+        recording.recorder.onstop();
+        return;
+      }
+      recording.recorder.stop();
+    });
+  }
+
+  isRecording() {
+    return this.recording?.recorder?.state === 'recording';
+  }
+
+  recordingMimeType() {
+    return this.recording?.mimeType || null;
+  }
+
+  createEvaluationSimulation() {
+    if (!this.mujoco || !this.model) {
+      throw new Error('MuJoCo viewer is not ready.');
+    }
+    return new BrowserMujocoEvaluationSimulation(this);
+  }
+
   dispose() {
     this.disposed = true;
+    this.endDragForce();
+    if (this.recording?.recorder?.state === 'recording') {
+      this.recording.recorder.stop();
+    }
+    this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown, true);
+    document.removeEventListener('pointermove', this.handlePointerMove, true);
+    document.removeEventListener('pointerup', this.handlePointerUp, true);
+    document.removeEventListener('pointercancel', this.handlePointerUp, true);
     this.renderer.setAnimationLoop(null);
     this.resizeObserver?.disconnect();
     this.controls.removeEventListener('change', this.handleControlsChange);
     this.controls.dispose();
+    this.referenceOverlayData?.delete?.();
+    for (const overlay of Object.values(this.referenceOverlays || {})) {
+      overlay?.data?.delete?.();
+    }
     this.simulation?.free();
     this.renderer.dispose();
     this.container.replaceChildren();
+  }
+}
+
+export class BrowserMujocoEvaluationSimulation {
+  constructor(viewer) {
+    this.mujoco = viewer.mujoco;
+    this.model = viewer.model;
+    this.data = new this.mujoco.MjData(this.model);
+    this.simulation = createSimulationWrapper(this.mujoco, this.model, this.data, { ownsModel: false });
+    this.bodyNames = viewer.bodyNames || [];
+    this.jointNamesMJC = viewer.jointNamesMJC || [];
+    this.jointAddressByName = viewer.jointAddressByName || new Map();
+    this.jointVelocityAddressByName = viewer.jointVelocityAddressByName || new Map();
+    this.actuatorAddressByJointName = viewer.actuatorAddressByJointName || new Map();
+    this.geomIdByName = viewer.geomIdByName || new Map();
+    this.defaultPhysicsOptions = clonePhysicsOptions(viewer.defaultPhysicsOptions || viewer.capturePhysicsOptions?.() || null);
+    this.currentPhysicsOptionsSignature = '';
+  }
+
+  configurePhysics(options = null) {
+    if (!this.model) {
+      return;
+    }
+    const physicsOptions = mergePhysicsOptions(this.defaultPhysicsOptions, options);
+    const signature = JSON.stringify(physicsOptions);
+    if (signature === this.currentPhysicsOptionsSignature) {
+      return;
+    }
+    this.currentPhysicsOptionsSignature = signature;
+    applyPhysicsOptionsToModel(this, physicsOptions);
+  }
+
+  resetPhysics(payload) {
+    if (!this.simulation) {
+      return;
+    }
+    this.simulation.resetData?.();
+    const normalizedPayload = payload?.state
+      ? payload
+      : {
+          sequence_id: 'evaluation_reset',
+          frame_index: 0,
+          joint_names: this.jointNamesMJC || [],
+          body_names: this.bodyNames || [],
+          state: payload
+        };
+    writePayloadToSimulation(this.simulation, normalizedPayload, this.jointAddressByName);
+    zeroArray(this.simulation.ctrl);
+    zeroArray(this.simulation.qfrc_applied);
+    this.simulation.forward();
+  }
+
+  stepPhysics(options = {}) {
+    if (!this.simulation || !this.model) {
+      return null;
+    }
+    this.configurePhysics(options.physics_options);
+    const steps = Math.max(1, Math.floor(options.steps ?? 1));
+    const jointNames = options.joint_names || [];
+    const targets = options.joint_positions || [];
+    const kp = options.kp || [];
+    const kd = options.kd || [];
+    const torqueLimits = options.torque_limits || [];
+
+    for (let step = 0; step < steps; step += 1) {
+      zeroArray(this.simulation.ctrl);
+      zeroArray(this.simulation.qfrc_applied);
+      applyPdControlStep({
+        simulation: this.simulation,
+        model: this.model,
+        jointNames,
+        targets,
+        kp,
+        kd,
+        torqueLimits,
+        jointAddressByName: this.jointAddressByName,
+        jointVelocityAddressByName: this.jointVelocityAddressByName,
+        actuatorAddressByJointName: this.actuatorAddressByJointName,
+        defaultKp: options.defaultKp ?? 35,
+        defaultKd: options.defaultKd ?? 1.5
+      });
+      this.simulation.step();
+    }
+
+    this.simulation.forward();
+    return this.readState(jointNames);
+  }
+
+  getPhysicsDecimation(targetControlDt = 0.02) {
+    return physicsDecimationForModel(this.model, targetControlDt);
+  }
+
+  readState(jointNames = this.jointNamesMJC || []) {
+    return readSimulationState({
+      simulation: this.simulation,
+      jointNames,
+      jointNamesMJC: this.jointNamesMJC,
+      jointAddressByName: this.jointAddressByName,
+      jointVelocityAddressByName: this.jointVelocityAddressByName
+    });
+  }
+
+  readContactSummary() {
+    return readContactSummaryFromData({
+      mujoco: this.mujoco,
+      model: this.model,
+      data: this.data,
+      bodyNames: this.bodyNames
+    });
+  }
+
+  dispose() {
+    if (this.model) {
+      applyPhysicsOptionsToModel(this, mergePhysicsOptions(this.defaultPhysicsOptions, null));
+    }
+    this.simulation?.free?.();
+    this.simulation = null;
+    this.data = null;
   }
 }

@@ -106,6 +106,10 @@ export class TrackingHelper {
     const clampedIdx = Math.max(0, Math.min(this.refIdx, Math.max(this.refLen - 1, 0)));
     const transitionLen = this.transitionLen ?? 0;
     const motionLen = this.motionLen ?? 0;
+    const sourceStartFrame = this.sourceStartFrame ?? 0;
+    const sourceFrame = this.currentName === 'default'
+      ? 0
+      : sourceStartFrame + Math.max(0, clampedIdx - transitionLen);
     const inTransition = transitionLen > 0 && clampedIdx < transitionLen;
     return {
       available: this.refLen > 0,
@@ -115,6 +119,8 @@ export class TrackingHelper {
       refLen: this.refLen,
       transitionLen,
       motionLen,
+      sourceStartFrame,
+      sourceFrame,
       inTransition,
       isDefault: this.currentName === 'default'
     };
@@ -130,6 +136,7 @@ export class TrackingHelper {
     this.refRootQuat = [];
     this.refRootPos = [];
     this.currentName = 'default';
+    this.sourceStartFrame = 0;
     this.requestMotion('default', state);
   }
 
@@ -163,6 +170,48 @@ export class TrackingHelper {
       rootQuat: this.refRootQuat[clamped],
       rootPos: this.refRootPos[clamped]
     };
+  }
+
+  anchorCurrentFrameToState(state) {
+    if (!state || !this.isReady()) {
+      return false;
+    }
+    const currentRootPos = Array.from(state.rootPos ?? []);
+    const currentRootQuat = Array.from(state.rootQuat ?? []);
+    if (currentRootPos.length < 3 || currentRootQuat.length < 4) {
+      return false;
+    }
+
+    const anchorIndex = clampIndex(this.refIdx, this.refLen);
+    const anchorRootPos = this.refRootPos[anchorIndex];
+    const anchorRootQuat = this.refRootQuat[anchorIndex];
+    if (!anchorRootPos || !anchorRootQuat) {
+      return false;
+    }
+
+    const anchorYaw = yawComponent(anchorRootQuat);
+    const currentYaw = yawComponent(currentRootQuat);
+    const yawDeltaWxyz = quatMultiply(currentYaw, quatInverse(anchorYaw));
+    const yawDelta = new THREE.Quaternion(
+      yawDeltaWxyz[1],
+      yawDeltaWxyz[2],
+      yawDeltaWxyz[3],
+      yawDeltaWxyz[0]
+    );
+    const anchorPosition = new THREE.Vector3(anchorRootPos[0], anchorRootPos[1], anchorRootPos[2]);
+    const targetPosition = new THREE.Vector3(currentRootPos[0], currentRootPos[1], anchorRootPos[2]);
+
+    this.refRootPos = this.refRootPos.map((row) => {
+      const position = new THREE.Vector3(row[0], row[1], row[2]);
+      position.sub(anchorPosition).applyQuaternion(yawDelta).add(targetPosition);
+      return Float32Array.from([position.x, position.y, position.z]);
+    });
+    this.refRootQuat = this.refRootQuat.map((row) => {
+      const rotation = new THREE.Quaternion(row[1], row[2], row[3], row[0]);
+      const aligned = yawDelta.clone().multiply(rotation);
+      return Float32Array.from([aligned.w, aligned.x, aligned.y, aligned.z]);
+    });
+    return true;
   }
 
   _readCurrentState(state) {
@@ -219,7 +268,8 @@ export class TrackingHelper {
 
   _startMotionFromCurrent(name, state, options = {}) {
     const current = this._readCurrentState(state);
-    const motion = this._sliceMotionFromFrame(this.motions[name], options.startFrame);
+    const startFrame = Math.floor(Number(options.startFrame) || 0);
+    const motion = this._sliceMotionFromFrame(this.motions[name], startFrame);
     const aligned = this._alignMotionToCurrent(motion, current);
     const transition = this._buildTransition(current, aligned, options.transitionSteps);
     this.refJointPos = [...transition.jointPos, ...aligned.jointPos];
@@ -230,6 +280,7 @@ export class TrackingHelper {
     this.refIdx = 0;
     this.refLen = this.refJointPos.length;
     this.currentName = name;
+    this.sourceStartFrame = clampIndex(startFrame, this.motions[name]?.jointPos?.length ?? 0);
     this.currentDone = this.refLen <= 1;
   }
 

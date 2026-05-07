@@ -164,6 +164,7 @@ class PolicyRegistry:
                     entrypoint=override.get("entrypoint") or payload.get("entrypoint"),
                     weights_path=override.get("weights_path") or payload.get("weights_path"),
                     config_path=override.get("config_path") or _dynamic_config_url(policy_id),
+                    module_path=override.get("module_path") or payload.get("module_path"),
                     config_template=override.get("config_template") or config_template,
                     control_mode=override.get("control_mode") or payload.get("control_mode", "joint_position_target"),
                     tags=tags,

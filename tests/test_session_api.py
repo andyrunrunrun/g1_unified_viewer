@@ -12,7 +12,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from g1_viewer.api import create_app
-from g1_viewer.importers import detect_format as importer_detect_format
+from g1_viewer.importers import detect_format as importer_detect_format, load_sequence
 from g1_viewer.models import (
     CanonicalRobotState,
     SimulationSnapshot,
@@ -468,6 +468,54 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(summary.source_format, "twist2")
         self.assertIn("policy stopped", logs)
 
+    def test_twist2_loader_detects_xyzw_root_rot(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "xyzw_motion.json"
+            motion_path.write_text(
+                json.dumps(
+                    {
+                        "fps": 50,
+                        "root_pos": [[0.0, 0.0, 0.78], [0.1, 0.0, 0.78]],
+                        "root_rot": [
+                            [0.0, 0.0, 0.0, 1.0],
+                            [0.0, 0.0, 0.70710678, 0.70710678],
+                        ],
+                        "dof_pos": [[0.0], [0.1]],
+                    }
+                )
+            )
+
+            sequence = load_sequence(str(motion_path), "twist2")
+
+        self.assertEqual(sequence.metadata["root_rot_order"], "xyzw")
+        self.assertEqual(sequence.frames[0].root_rotation_wxyz, [1.0, 0.0, 0.0, 0.0])
+        self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[0], 0.70710678)
+        self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[3], 0.70710678)
+
+    def test_twist2_loader_detects_wxyz_root_rot(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "wxyz_motion.json"
+            motion_path.write_text(
+                json.dumps(
+                    {
+                        "fps": 50,
+                        "root_pos": [[0.0, 0.0, 0.78], [0.1, 0.0, 0.78]],
+                        "root_rot": [
+                            [1.0, 0.0, 0.0, 0.0],
+                            [0.70710678, 0.0, 0.0, 0.70710678],
+                        ],
+                        "dof_pos": [[0.0], [0.1]],
+                    }
+                )
+            )
+
+            sequence = load_sequence(str(motion_path), "twist2")
+
+        self.assertEqual(sequence.metadata["root_rot_order"], "wxyz")
+        self.assertEqual(sequence.frames[0].root_rotation_wxyz, [1.0, 0.0, 0.0, 0.0])
+        self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[0], 0.70710678)
+        self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[3], 0.70710678)
+
 
 class ViewerTestStateControllerTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -697,6 +745,11 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(onnx_policy["model_file"], "policy_latest.onnx")
         self.assertEqual(onnx_policy["display_name_i18n"]["zh"], "运动追踪")
         by_id = {policy["policy_id"]: policy for policy in policies}
+        sonic_policy = by_id["sonic"]
+        self.assertEqual(sonic_policy["runtime"], "browser")
+        self.assertEqual(sonic_policy["framework"], "custom_js")
+        self.assertEqual(sonic_policy["module_path"], "./SonicPolicy.js")
+        self.assertEqual(sonic_policy["config_path"], "/policy-plugins/sonic/sonic_policy.json")
         for model_path in twist2_models:
             policy_id = _twist2_policy_id_for_model(model_path)
             twist2_policy = by_id[policy_id]
@@ -934,8 +987,10 @@ class RootPageSmokeTest(unittest.TestCase):
         frontend_source = REPO_ROOT / "frontend" / "src" / "App.vue"
         body = frontend_source.read_text(encoding="utf-8")
 
-        for control_id in ("resetTestButton", "dragPane", "impulseMagnitudeInput", "impulseDurationInput"):
+        for control_id in ("resetStanceButton", "contactForceToggleButton", "cameraPresetSelect", "dragPane"):
             self.assertIn(f'id="{control_id}"', body)
+        for removed_test_control_id in ("resetTestButton", "impulseMagnitudeInput", "impulseDurationInput"):
+            self.assertNotIn(f'id="{removed_test_control_id}"', body)
 
         for legacy_id in (
             "pathInput",
@@ -957,15 +1012,13 @@ class RootPageSmokeTest(unittest.TestCase):
             "viewerBadge",
             "modeBadge",
             "playbackBadge",
-            "policyBadge",
-            "physicsBadge",
             "treeRoot",
             "treeStatus",
             "clipSummary",
             "commandStatus",
             "policyStatus",
-            "policyPane",
-            "cameraPane",
+            "policyList",
+            "evaluationPanel",
             "logPane",
             "observationPane",
             "actionPane",
@@ -975,11 +1028,8 @@ class RootPageSmokeTest(unittest.TestCase):
         self.assertIn("switchSelectedPolicy(policy.policy_id)", body)
         self.assertIn(':disabled="policyDisabled(policy)"', body)
 
-        presets = re.findall(r'class="impulseButton[^"]*"\s+data-preset="([^"]+)"', body)
-        self.assertEqual(
-            presets,
-            ["push_forward", "push_backward", "push_left", "push_right", "lift_up"],
-        )
+        camera_options = re.findall(r"\{ value: '([^']+)', label: t\('evaluation\.camera[^']+'\) \}", body)
+        self.assertEqual(camera_options, ["default", "front", "side", "back", "top"])
 
     def test_root_page_script_avoids_policy_list_rebuild_during_session_poll(self) -> None:
         frontend_source = REPO_ROOT / "frontend" / "src" / "App.vue"
@@ -998,10 +1048,10 @@ class RootPageSmokeTest(unittest.TestCase):
 class ReadmeSmokeTest(unittest.TestCase):
     def test_readme_mentions_dual_interface_and_physics_modes(self) -> None:
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("HTTP API + native viewer", readme)
-        self.assertIn("SessionController", readme)
-        self.assertIn("Physics OFF", readme)
-        self.assertIn("Physics ON", readme)
+        self.assertIn("FastAPI", readme)
+        self.assertIn("浏览器 MuJoCo", readme)
+        self.assertIn("关闭 Physics", readme)
+        self.assertIn("开启 Physics", readme)
 
 
 class BrowserApiTest(unittest.TestCase):

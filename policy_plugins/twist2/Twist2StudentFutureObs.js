@@ -225,7 +225,7 @@ export class Twist2StudentFutureObs {
     const out = new Float32Array(this.obsSingleSize);
     let offset = 0;
     for (const step of this.motionSteps) {
-      out.set(this._buildMimicFrame(step), offset);
+      out.set(this._buildMimicFrame(step, 'motion'), offset);
       offset += this.mimicSingleSize;
     }
     out.set(this._buildProprio(state), offset);
@@ -236,13 +236,13 @@ export class Twist2StudentFutureObs {
     const out = new Float32Array(this.futureSize);
     let offset = 0;
     for (const step of this.futureSteps) {
-      out.set(this._buildMimicFrame(step), offset);
+      out.set(this._buildMimicFrame(step, 'future'), offset);
       offset += this.mimicSingleSize;
     }
     return out;
   }
 
-  _buildMimicFrame(step) {
+  _buildMimicFrame(step, slot = 'motion') {
     const tracking = this.policy.tracking;
     const out = new Float32Array(this.mimicSingleSize);
     if (!tracking?.isReady()) {
@@ -264,7 +264,7 @@ export class Twist2StudentFutureObs {
     out[4] = pitch;
     out[5] = rootAngVelLocal[2];
     out.set(readVector(tracking.refJointPos[index], this.numActions, 0), 6);
-    return out;
+    return this.policy.smoothTargetVector?.(`Twist2StudentFutureObs:${slot}:${step}`, out) ?? out;
   }
 
   _buildProprio(state = {}) {
