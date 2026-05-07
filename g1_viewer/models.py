@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, root_validator
 
 
 SourceType = Literal["dataset", "policy"]
-MotionFormat = Literal["sonic", "twist2", "policy"]
+MotionFormat = Literal["sonic", "twist2", "kimodo_csv", "policy"]
 ExportMotionFormat = Literal["sonic", "twist2"]
 Twist2ExportExtension = Literal[".pkl", ".npz", ".json"]
 PlaybackState = Literal["empty", "stopped", "paused", "playing"]

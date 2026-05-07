@@ -16,13 +16,13 @@ test('layout switches out of three-column mode before fixed tracks can overflow'
 
 test('viewer stage is visually owned by the MuJoCo render instead of a CSS overlay grid', () => {
   assert.doesNotMatch(styles, /\.mujoco-stage::before/);
-  assert.match(styles, /\.industrial-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(250px,\s*0\.78fr\)\s+minmax\(820px,\s*1\.9fr\)\s+minmax\(290px,\s*0\.92fr\)/);
+  assert.match(styles, /\.industrial-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(250px,\s*0\.78fr\)\s+minmax\(820px,\s*1\.9fr\)\s+minmax\(250px,\s*0\.78fr\)/);
   assert.match(styles, /\.layout\s*\{[\s\S]*align-items:\s*start/);
   assert.match(styles, /\.viewer-frame\s*\{[\s\S]*background:\s*var\(--stage-bg\)/);
 });
 
 test('industrial console layout prioritizes viewer and collapses diagnostics', () => {
-  assert.match(styles, /\.industrial-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(250px,\s*0\.78fr\)\s+minmax\(820px,\s*1\.9fr\)\s+minmax\(290px,\s*0\.92fr\)/);
+  assert.match(styles, /\.industrial-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(250px,\s*0\.78fr\)\s+minmax\(820px,\s*1\.9fr\)\s+minmax\(250px,\s*0\.78fr\)/);
   assert.match(styles, /\.workflow-rail,\s*\.control-rail\s*\{[\s\S]*overflow-x:\s*hidden/);
   assert.match(styles, /\.mujoco-stage\s*\{[\s\S]*height:\s*calc\(100vh - 224px\)/);
   assert.match(styles, /\.diagnostics-panel:not\(\[open\]\) \.debug-grid\s*\{[\s\S]*display:\s*none/);
@@ -52,7 +52,7 @@ test('global language toggle stays compact in the top bar', () => {
   assert.match(styles, /\.language-toggle\s*\{[\s\S]*border:\s*1px solid color-mix\(in srgb,\s*var\(--amber\)\s*22%,\s*var\(--line\)\s*78%\)/);
   assert.match(styles, /\.language-toggle\s*\{[\s\S]*background:\s*color-mix\(in srgb,\s*var\(--surface\)\s*76%,\s*var\(--surface-2\)\s*24%\)/);
   assert.match(styles, /\.language-toggle-options\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(38px,\s*auto\)\)/);
-  assert.match(styles, /\.language-toggle button\s*\{[\s\S]*min-height:\s*34px/);
+  assert.match(styles, /\.language-toggle button\s*\{[\s\S]*min-height:\s*28px/);
   assert.match(styles, /\.language-toggle button\s*\{[\s\S]*font-size:\s*13px/);
   assert.match(styles, /\.language-toggle button\.active\s*\{[\s\S]*background:\s*color-mix\(in srgb,\s*var\(--amber\)\s*18%,\s*var\(--surface-3\)\s*82%\)/);
   assert.match(styles, /\.language-icon\s*\{[\s\S]*width:\s*16px/);
@@ -71,9 +71,9 @@ test('top command bar uses a compact status rail and action cluster', () => {
   assert.match(styles, /\.topbar-mode-cluster\s*\{[\s\S]*padding:\s*6px/);
   assert.match(styles, /\.topbar-mode-cluster\s*\{[\s\S]*border:\s*1px solid color-mix\(in srgb,\s*var\(--amber\)\s*22%,\s*var\(--line\)\s*78%\)/);
   assert.match(styles, /\.topbar-icon-button\s*\{[\s\S]*width:\s*48px/);
-  assert.match(styles, /\.topbar-icon-button\s*\{[\s\S]*min-height:\s*44px/);
+  assert.match(styles, /\.topbar-icon-button\s*\{[\s\S]*min-height:\s*32px/);
   assert.match(styles, /\.topbar-icon-button span\s*\{[\s\S]*position:\s*absolute/);
-  assert.match(styles, /\.physics-toggle-card\s*\{[\s\S]*min-height:\s*56px/);
+  assert.match(styles, /\.physics-toggle-card\s*\{[\s\S]*min-height:\s*44px/);
   assert.match(styles, /\.physics-toggle-card\s*\{[\s\S]*min-width:\s*152px/);
   assert.match(styles, /\.physics-toggle-copy strong\s*\{[\s\S]*letter-spacing:\s*0\.16em/);
   assert.match(styles, /\.physics-toggle-indicator\s*\{[\s\S]*width:\s*10px/);
@@ -184,7 +184,7 @@ test('evaluation workbench keeps metrics dense and side-rail safe', () => {
 test('camera presets and recording controls are compact icon commands', () => {
   assert.match(styles, /\.viewer-actions\s*\{[\s\S]*display:\s*grid/);
   assert.match(styles, /\.viewer-command-strip\s*\{[\s\S]*display:\s*grid/);
-  assert.match(styles, /\.viewer-command-strip\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(190px,\s*220px\)/);
+  assert.match(styles, /\.viewer-command-strip\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(140px,\s*160px\)/);
   assert.match(styles, /\.camera-preset-field\s*\{[\s\S]*display:\s*grid/);
   assert.match(styles, /\.camera-preset-field\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\)/);
   assert.match(styles, /\.camera-preset-field select\s*\{[\s\S]*min-height:\s*34px/);
@@ -225,23 +225,23 @@ test('evaluation comparison is promoted into the main workbench and advanced pan
   assert.match(styles, /\.recording-panel\s*\{[\s\S]*padding:\s*14px 16px 16px/);
   assert.match(styles, /\.recording-panel-title\s*\{[\s\S]*gap:\s*4px/);
   assert.match(styles, /\.policy-control-card \.panel-title p,\s*\.evaluation-control-card \.panel-title p\s*\{[\s\S]*font-size:\s*10px/);
-  assert.match(styles, /\.difficulty-strip span\s*\{[\s\S]*font-size:\s*11px/);
-  assert.match(styles, /\.difficulty-strip strong\s*\{[\s\S]*font-size:\s*18px/);
-  assert.match(styles, /\.difficulty-strip small\s*\{[\s\S]*font-size:\s*11px/);
+  assert.match(styles, /\.difficulty-strip span\s*\{[\s\S]*font-size:\s*10px/);
+  assert.match(styles, /\.difficulty-strip strong\s*\{[\s\S]*font-size:\s*15px/);
+  assert.match(styles, /\.difficulty-strip small\s*\{[\s\S]*font-size:\s*10px/);
   assert.match(styles, /\.metric-tile\s*\{[\s\S]*font-size:\s*11px/);
   assert.match(styles, /\.contact-force-row\s*\{[\s\S]*font-size:\s*11px/);
   assert.match(styles, /\.comparison-row\s*\{[\s\S]*font-size:\s*11px/);
   assert.match(styles, /\.metric-tile strong\s*\{[\s\S]*font-size:\s*13px/);
   assert.match(styles, /\.contact-force-row strong\s*\{[\s\S]*font-size:\s*13px/);
   assert.match(styles, /\.comparison-row strong\s*\{[\s\S]*font-size:\s*13px/);
-  assert.match(styles, /\.reference-overlay-stack\s*\{[\s\S]*gap:\s*12px/);
-  assert.match(styles, /\.reference-overlay-toggle\s*\{[\s\S]*min-height:\s*74px/);
-  assert.match(styles, /\.reference-overlay-toggle\s*\{[\s\S]*padding:\s*14px 16px/);
-  assert.match(styles, /\.difficulty-strip\s*\{[\s\S]*background:\s*linear-gradient\(180deg,\s*rgba\(255,\s*255,\s*255,\s*0\.02\),\s*transparent 22%\),\s*color-mix\(in srgb,\s*var\(--surface-2\)\s*92%,\s*var\(--amber\)\s*8%\)/);
+  assert.match(styles, /\.reference-overlay-stack\s*\{[\s\S]*gap:\s*8px/);
+  assert.match(styles, /\.reference-overlay-toggle\s*\{[\s\S]*min-height:\s*52px/);
+  assert.match(styles, /\.reference-overlay-toggle\s*\{[\s\S]*padding:\s*8px 10px/);
+  assert.match(styles, /\.difficulty-strip\s*\{[\s\S]*background:\s*var\(--surface-2\)/);
 });
 
 test('workspace styling promotes a stage-first composition with refined side rails', () => {
-  assert.match(styles, /\.industrial-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(250px,\s*0\.78fr\)\s+minmax\(820px,\s*1\.9fr\)\s+minmax\(290px,\s*0\.92fr\)/);
+  assert.match(styles, /\.industrial-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(250px,\s*0\.78fr\)\s+minmax\(820px,\s*1\.9fr\)\s+minmax\(250px,\s*0\.78fr\)/);
   assert.match(styles, /\.left-rail,\s*\.right-rail,\s*\.stage-column\s*\{[\s\S]*display:\s*grid/);
   assert.match(styles, /\.stage-column\s*\{[\s\S]*gap:\s*0/);
   assert.match(styles, /\.viewer-stage-panel\s*\{[\s\S]*padding:\s*0/);

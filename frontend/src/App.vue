@@ -4,7 +4,6 @@
       <div class="brand-block">
         <p class="eyebrow">{{ t('app.eyebrow') }}</p>
         <h1>G1 Unified Viewer</h1>
-        <p class="brand-subtitle">{{ t('app.subtitle') }}</p>
       </div>
       <div class="topbar-controls">
         <div class="topbar-status-strip" aria-label="Console status">

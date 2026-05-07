@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .exporters import export_trimmed_sequence
+from .exporters import _default_export_format, export_trimmed_sequence
 from .models import (
     BrowserListRequest,
     BrowserListResponse,
@@ -439,7 +439,7 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
             frame_count = request.end_frame - request.start_frame + 1
             return TrimExportResponse(
                 output_path=str(output_path),
-                export_format=request.export_format or sequence.source_format,  # type: ignore[arg-type]
+                export_format=request.export_format or _default_export_format(sequence),
                 frame_count=frame_count,
             )
         except KeyError as exc:

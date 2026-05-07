@@ -12,10 +12,13 @@ from typing import Any
 
 import numpy as np
 
-from .config import CANONICAL_G1_JOINT_NAMES_29, SONIC_TO_MUJOCO_29
+from .config import CANONICAL_G1_JOINT_NAMES_29, SONIC_TO_MUJOCO_29, resolve_g1_model_path
 from .models import CanonicalRobotState, ScanItem, StateSequence
 
 SUPPORTED_TWIST2_EXTENSIONS = {".pkl", ".npz", ".npy", ".json"}
+KIMODO_CSV_SOURCE_FPS = 30.0
+KIMODO_CSV_TARGET_FPS = 50.0
+KIMODO_CSV_BODY_INDEXES = [0, 4, 10, 18, 5, 11, 19, 9, 16, 22, 28, 17, 23, 29]
 
 
 def _safe_uuid() -> str:
@@ -133,6 +136,107 @@ def _axis_angle_to_wxyz(axis_angle: np.ndarray) -> np.ndarray:
     quat = np.concatenate([np.cos(half), axis * np.sin(half)], axis=1)
     quat[angle[:, 0] == 0.0] = np.array([1.0, 0.0, 0.0, 0.0])
     return quat
+
+
+def _finite_difference(values: np.ndarray, fps: float) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if values.shape[0] <= 1:
+        return np.zeros_like(values)
+    return np.gradient(values, 1.0 / fps, axis=0, edge_order=1)
+
+
+def _slerp_wxyz(key_times: np.ndarray, quaternions_wxyz: np.ndarray, target_times: np.ndarray) -> np.ndarray:
+    quaternions_wxyz = _normalize_quaternions(quaternions_wxyz)
+    if target_times.size == 0:
+        return np.zeros((0, 4), dtype=np.float64)
+    if quaternions_wxyz.shape[0] == 1:
+        return np.repeat(quaternions_wxyz, target_times.size, axis=0)
+
+    indexes = np.searchsorted(key_times, target_times, side="right") - 1
+    indexes = np.clip(indexes, 0, key_times.shape[0] - 2)
+    t0 = key_times[indexes]
+    t1 = key_times[indexes + 1]
+    denom = np.maximum(t1 - t0, 1e-12)
+    alpha = ((target_times - t0) / denom)[:, None]
+
+    q0 = quaternions_wxyz[indexes]
+    q1 = quaternions_wxyz[indexes + 1]
+    dots = np.sum(q0 * q1, axis=1, keepdims=True)
+    q1 = np.where(dots < 0.0, -q1, q1)
+    dots = np.clip(np.abs(dots), 0.0, 1.0)
+
+    near_linear = dots > 0.9995
+    theta_0 = np.arccos(dots)
+    sin_theta_0 = np.sin(theta_0)
+    theta = theta_0 * alpha
+    sin_theta = np.sin(theta)
+    scale0 = np.sin(theta_0 - theta) / np.maximum(sin_theta_0, 1e-12)
+    scale1 = sin_theta / np.maximum(sin_theta_0, 1e-12)
+    spherical = scale0 * q0 + scale1 * q1
+    linear = q0 + alpha * (q1 - q0)
+    return _normalize_quaternions(np.where(near_linear, linear, spherical))
+
+
+def _resample_motion(
+    *,
+    root_translation: np.ndarray,
+    root_rotation_wxyz: np.ndarray,
+    joint_positions: np.ndarray,
+    source_fps: float,
+    target_fps: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if abs(source_fps - target_fps) < 1e-6 or root_translation.shape[0] <= 1:
+        return root_translation, root_rotation_wxyz, joint_positions
+
+    source_times = np.arange(root_translation.shape[0], dtype=np.float64) / source_fps
+    duration = source_times[-1]
+    target_times = np.arange(0.0, duration + 1e-9, 1.0 / target_fps, dtype=np.float64)
+    target_times = np.clip(target_times, source_times[0], source_times[-1])
+    if target_times.size >= 2 and np.isclose(target_times[-1], target_times[-2]):
+        target_times = target_times[:-1]
+
+    root_resampled = np.empty((target_times.shape[0], 3), dtype=np.float64)
+    joints_resampled = np.empty((target_times.shape[0], joint_positions.shape[1]), dtype=np.float64)
+    for dim in range(root_resampled.shape[1]):
+        root_resampled[:, dim] = np.interp(target_times, source_times, root_translation[:, dim])
+    for dim in range(joints_resampled.shape[1]):
+        joints_resampled[:, dim] = np.interp(target_times, source_times, joint_positions[:, dim])
+
+    root_rotation_resampled = _slerp_wxyz(source_times, root_rotation_wxyz, target_times)
+    return root_resampled, root_rotation_resampled, joints_resampled
+
+
+def _run_g1_fk(
+    *,
+    root_translation: np.ndarray,
+    root_rotation_wxyz: np.ndarray,
+    joint_positions: np.ndarray,
+    body_indexes: list[int],
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(resolve_g1_model_path()))
+    data = mujoco.MjData(model)
+    body_positions = np.zeros((joint_positions.shape[0], len(body_indexes), 3), dtype=np.float64)
+    body_rotations = np.zeros((joint_positions.shape[0], len(body_indexes), 4), dtype=np.float64)
+    body_names: list[str] = []
+
+    for body_index in body_indexes:
+        body_id = body_index + 1
+        body_names.append(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id) or f"body_{body_index}")
+
+    for frame_index in range(joint_positions.shape[0]):
+        data.qpos[:] = 0.0
+        data.qpos[:3] = root_translation[frame_index]
+        data.qpos[3:7] = root_rotation_wxyz[frame_index]
+        data.qpos[7 : 7 + joint_positions.shape[1]] = joint_positions[frame_index]
+        mujoco.mj_forward(model, data)
+        for body_slot, body_index in enumerate(body_indexes):
+            body_id = body_index + 1
+            body_positions[frame_index, body_slot] = data.xpos[body_id]
+            body_rotations[frame_index, body_slot] = data.xquat[body_id]
+
+    return body_positions, body_rotations, body_names
 
 
 def _sequence_from_arrays(
@@ -464,7 +568,102 @@ class Twist2Importer(DatasetImporter):
         return {"root_trans_offset", "root_rot", "dof"}.issubset(payload.keys())
 
 
-IMPORTERS: list[DatasetImporter] = [SonicImporter(), Twist2Importer()]
+class KimodoCsvImporter(DatasetImporter):
+    format_name = "kimodo_csv"
+
+    def can_handle(self, path: Path) -> bool:
+        return path.is_file() and path.suffix.lower() == ".csv" and self._sniff_g1_qpos_csv(path)
+
+    def scan_items(self, path: Path) -> list[ScanItem]:
+        candidates: list[Path] = []
+        if path.is_file() and self.can_handle(path):
+            candidates.append(path)
+        elif path.is_dir():
+            candidates.extend(candidate for candidate in path.rglob("*.csv") if self.can_handle(candidate))
+        return [
+            ScanItem(
+                path=str(candidate),
+                name=candidate.stem,
+                format="kimodo_csv",
+                item_type="file",
+            )
+            for candidate in sorted(dict.fromkeys(candidates))
+        ]
+
+    def load(self, path: Path) -> StateSequence:
+        if not path.is_file():
+            raise ValueError(f"{path} is not a Kimodo G1 qpos CSV")
+        qpos = np.loadtxt(path, delimiter=",", dtype=np.float64)
+        if qpos.ndim == 1:
+            qpos = qpos[None, :]
+        if qpos.ndim != 2 or qpos.shape[1] != 36:
+            raise ValueError(f"Expected Kimodo G1 qpos CSV with shape (T, 36); got {qpos.shape}")
+
+        root_translation = qpos[:, :3]
+        root_rotation = _normalize_quaternions(qpos[:, 3:7])
+        joint_positions = qpos[:, 7:]
+        root_translation, root_rotation, joint_positions = _resample_motion(
+            root_translation=root_translation,
+            root_rotation_wxyz=root_rotation,
+            joint_positions=joint_positions,
+            source_fps=KIMODO_CSV_SOURCE_FPS,
+            target_fps=KIMODO_CSV_TARGET_FPS,
+        )
+        joint_velocities = _finite_difference(joint_positions, KIMODO_CSV_TARGET_FPS)
+        body_positions, body_rotations, body_names = _run_g1_fk(
+            root_translation=root_translation,
+            root_rotation_wxyz=root_rotation,
+            joint_positions=joint_positions,
+            body_indexes=KIMODO_CSV_BODY_INDEXES,
+        )
+
+        metadata = {
+            "input_format": "kimodo_g1_qpos_csv",
+            "source_fps": KIMODO_CSV_SOURCE_FPS,
+            "output_fps": KIMODO_CSV_TARGET_FPS,
+            "body_indexes": KIMODO_CSV_BODY_INDEXES,
+            "original_shape": tuple(qpos.shape),
+        }
+        return _sequence_from_arrays(
+            name=path.stem,
+            source_format="kimodo_csv",
+            source_path=path,
+            fps=KIMODO_CSV_TARGET_FPS,
+            joint_positions=joint_positions,
+            joint_velocities=joint_velocities,
+            root_translation=root_translation,
+            root_rotation_wxyz=root_rotation,
+            body_positions=body_positions,
+            body_rotations_wxyz=body_rotations,
+            joint_names=CANONICAL_G1_JOINT_NAMES_29.copy(),
+            body_names=body_names,
+            metadata=metadata,
+        )
+
+    def _sniff_g1_qpos_csv(self, path: Path) -> bool:
+        try:
+            rows_seen = 0
+            with path.open("r", newline="") as handle:
+                reader = csv.reader(handle)
+                for row in reader:
+                    cleaned = [cell.strip() for cell in row if cell.strip()]
+                    if not cleaned:
+                        continue
+                    if len(cleaned) != 36:
+                        return False
+                    values = np.asarray([float(cell) for cell in cleaned], dtype=np.float64)
+                    quat_norm = float(np.linalg.norm(values[3:7]))
+                    if not np.isfinite(quat_norm) or quat_norm < 0.5 or quat_norm > 1.5:
+                        return False
+                    rows_seen += 1
+                    if rows_seen >= 2:
+                        return True
+        except Exception:
+            return False
+        return rows_seen > 0
+
+
+IMPORTERS: list[DatasetImporter] = [SonicImporter(), Twist2Importer(), KimodoCsvImporter()]
 
 
 def detect_format(path: Path) -> str | None:

@@ -13,6 +13,8 @@ def _is_sonic_directory(path: Path) -> bool:
 def _fast_motion_format(path: Path) -> str | None:
     if path.is_file() and path.suffix.lower() in SUPPORTED_TWIST2_EXTENSIONS:
         return "twist2"
+    if path.is_file() and path.suffix.lower() == ".csv":
+        return "kimodo_csv"
     return None
 
 

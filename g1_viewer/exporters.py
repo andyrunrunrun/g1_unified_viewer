@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import EXPORT_ROOT
+from .config import EXPORT_ROOT, SONIC_TO_MUJOCO_29
 from .models import ExportMotionFormat, StateSequence, Twist2ExportExtension
 
 
@@ -82,6 +82,8 @@ def export_trimmed_sequence(
 
 
 def _default_export_format(sequence: StateSequence) -> ExportMotionFormat:
+    if sequence.source_format == "kimodo_csv":
+        return "sonic"
     if sequence.source_format in {"sonic", "twist2"}:
         return sequence.source_format
     raise ValueError(f"Unsupported export format: {sequence.source_format}")
@@ -96,15 +98,21 @@ def _export_sonic(sequence: StateSequence, export_root: Path, *, use_format_subd
     joint_vel = np.asarray([frame.joint_velocities for frame in sequence.frames], dtype=float)
     body_pos = np.asarray([frame.body_positions for frame in sequence.frames], dtype=float)
     body_rot = np.asarray([frame.body_rotations_wxyz for frame in sequence.frames], dtype=float)
+    joint_headers = sequence.joint_names
+    if joint_pos.shape[1] == len(SONIC_TO_MUJOCO_29):
+        mujoco_to_sonic = np.argsort(np.asarray(SONIC_TO_MUJOCO_29))
+        joint_pos = joint_pos[:, mujoco_to_sonic]
+        joint_vel = joint_vel[:, mujoco_to_sonic] if joint_vel.size else joint_vel
+        joint_headers = [sequence.joint_names[index] for index in mujoco_to_sonic]
 
     _write_csv(
         target_dir / "joint_pos.csv",
-        sequence.joint_names,
+        joint_headers,
         joint_pos,
     )
     _write_csv(
         target_dir / "joint_vel.csv",
-        sequence.joint_names,
+        joint_headers,
         joint_vel,
     )
 

@@ -10,8 +10,10 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+import numpy as np
 
 from g1_viewer.api import create_app
+from g1_viewer.config import SONIC_TO_MUJOCO_29
 from g1_viewer.importers import detect_format as importer_detect_format, load_sequence
 from g1_viewer.models import (
     CanonicalRobotState,
@@ -31,6 +33,16 @@ TWIST2_SAMPLE = REPO_ROOT / "examples" / "sample_data" / "twist2_demo.pkl"
 def _twist2_policy_id_for_model(model_path: Path) -> str:
     model_stem = _slugify(model_path.stem)
     return model_stem if model_stem.startswith("twist2_") else f"twist2_{model_stem}"
+
+
+def _write_kimodo_csv(path: Path, frame_count: int = 3) -> np.ndarray:
+    qpos = np.zeros((frame_count, 36), dtype=np.float64)
+    qpos[:, 0] = np.linspace(0.0, 0.2, frame_count)
+    qpos[:, 2] = 0.78
+    qpos[:, 3] = 1.0
+    qpos[:, 7:] = np.arange(frame_count * 29, dtype=np.float64).reshape(frame_count, 29) * 0.01
+    np.savetxt(path, qpos, delimiter=",")
+    return qpos
 
 
 class PolicyPluginRegistryTest(unittest.TestCase):
@@ -515,6 +527,29 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(sequence.frames[0].root_rotation_wxyz, [1.0, 0.0, 0.0, 0.0])
         self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[0], 0.70710678)
         self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[3], 0.70710678)
+
+    def test_kimodo_csv_loader_detects_and_resamples_g1_qpos_csv(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "kimodo_motion.csv"
+            qpos = _write_kimodo_csv(motion_path, frame_count=3)
+
+            self.assertEqual(importer_detect_format(motion_path), "kimodo_csv")
+            sequence = load_sequence(str(motion_path))
+
+        self.assertEqual(sequence.name, "kimodo_motion")
+        self.assertEqual(sequence.source_format, "kimodo_csv")
+        self.assertEqual(sequence.fps, 50.0)
+        self.assertEqual(sequence.frame_count, 4)
+        self.assertEqual(len(sequence.joint_names), 29)
+        self.assertEqual(len(sequence.body_names), 14)
+        self.assertEqual(len(sequence.frames[0].body_positions), 14)
+        self.assertEqual(len(sequence.frames[0].body_rotations_wxyz), 14)
+        np.testing.assert_allclose(sequence.frames[0].root_translation, qpos[0, :3])
+        np.testing.assert_allclose(sequence.frames[0].root_rotation_wxyz, qpos[0, 3:7])
+        np.testing.assert_allclose(sequence.frames[0].joint_positions, qpos[0, 7:])
+        self.assertEqual(sequence.metadata["input_format"], "kimodo_g1_qpos_csv")
+        self.assertEqual(sequence.metadata["source_fps"], 30.0)
+        self.assertEqual(sequence.metadata["output_fps"], 50.0)
 
 
 class ViewerTestStateControllerTest(unittest.TestCase):
@@ -1242,6 +1277,21 @@ class BrowserApiTest(unittest.TestCase):
             self.assertEqual(nodes[0]["node_type"], "motion")
             self.assertEqual(nodes[0]["format"], "twist2")
 
+    def test_browser_list_detects_kimodo_csv_motion_by_extension_without_sniffing_payloads(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            motion_file = temp_root / "lidintiaoyuan.csv"
+            motion_file.write_text("not loaded during browser scan")
+
+            response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            nodes = response.json()["nodes"]
+            self.assertEqual(len(nodes), 1)
+            self.assertEqual(nodes[0]["name"], "lidintiaoyuan.csv")
+            self.assertEqual(nodes[0]["node_type"], "motion")
+            self.assertEqual(nodes[0]["format"], "kimodo_csv")
+
 
 class TrimExportApiTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -1301,6 +1351,32 @@ class TrimExportApiTest(unittest.TestCase):
             self.assertEqual(output_path.suffix, ".json")
             self.assertTrue(output_path.exists())
             self.assertFalse((output_dir / "twist2").exists())
+
+    def test_trim_export_defaults_kimodo_csv_to_sonic_output(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "kimodo_motion.csv"
+            qpos = _write_kimodo_csv(motion_path, frame_count=3)
+            sequence = self.controller.load_clip(str(motion_path), "kimodo_csv")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "sonic")
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertTrue((output_path / "joint_pos.csv").exists())
+            joint_pos = np.loadtxt(output_path / "joint_pos.csv", delimiter=",", skiprows=1)
+            np.testing.assert_allclose(joint_pos[0], qpos[0, 7:][np.argsort(SONIC_TO_MUJOCO_29)])
 
 
 class PolicyStepSnapshotTest(unittest.TestCase):
