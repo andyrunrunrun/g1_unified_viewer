@@ -16,7 +16,7 @@
 - 扫描本地动作目录，支持按文件夹懒加载浏览。
 - 加载 `sonic` 和 `twist2` 动作数据。
 - 播放、暂停、停止、跳帧、循环播放。
-- 裁剪动作并导出为 `sonic` 或 `twist2` 格式。
+- 裁剪动作并导出为 `sonic`、`twist2`、`motion_tracking_npz` 或 `kimodo_csv` 格式。
 - 浏览器 MuJoCo G1 viewer，可用鼠标旋转、缩放、拖拽施加外力。
 - Physics ON 时支持：
   - 策略跟踪动作。
@@ -121,6 +121,30 @@ http://127.0.0.1:8050
 - `root_pos`
 - `root_rot`
 - `local_body_pos`
+
+### motion_tracking_npz
+
+支持单文件 `.npz`。该格式用于 `/mnt/Datasets/huanghao_motion_tracking_npz/` 这类 motion tracking 数据，要求包含：
+
+- `fps`
+- `root_pos`
+- `root_rot`
+- `dof_pos`
+- `local_body_pos`
+- `joint_names`
+- `body_names`
+
+与 `twist2` 的核心轨迹字段相同，但命名元数据使用 `joint_names` 和 `body_names`；导出会保留同名 NPZ schema。
+
+### kimodo_csv
+
+支持单文件 `.csv`，每帧 36 列：
+
+- `root_pos` 3 列
+- `root_rot` 4 列，使用 `wxyz`
+- G1 29 关节位置
+
+导出 `kimodo_csv` 时会写回同样的 36 列 qpos CSV。
 
 ## 策略插件
 

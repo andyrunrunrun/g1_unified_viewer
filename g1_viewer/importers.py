@@ -16,6 +16,16 @@ from .config import CANONICAL_G1_JOINT_NAMES_29, SONIC_TO_MUJOCO_29, resolve_g1_
 from .models import CanonicalRobotState, ScanItem, StateSequence
 
 SUPPORTED_TWIST2_EXTENSIONS = {".pkl", ".npz", ".npy", ".json"}
+MOTION_TRACKING_NPZ_REQUIRED_KEYS = {
+    "fps",
+    "root_pos",
+    "root_rot",
+    "dof_pos",
+    "local_body_pos",
+    "joint_names",
+    "body_names",
+}
+MOTION_TRACKING_NPZ_DATASET_METADATA_FILES = ("meta_motion.json", "id_label.json")
 KIMODO_CSV_SOURCE_FPS = 30.0
 KIMODO_CSV_TARGET_FPS = 50.0
 KIMODO_CSV_BODY_INDEXES = [0, 4, 10, 18, 5, 11, 19, 9, 16, 22, 28, 17, 23, 29]
@@ -143,6 +153,26 @@ def _finite_difference(values: np.ndarray, fps: float) -> np.ndarray:
     if values.shape[0] <= 1:
         return np.zeros_like(values)
     return np.gradient(values, 1.0 / fps, axis=0, edge_order=1)
+
+
+def is_motion_tracking_npz_dataset_file(path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.suffix.lower() == ".npz"
+        and all((path.parent / file_name).is_file() for file_name in MOTION_TRACKING_NPZ_DATASET_METADATA_FILES)
+    )
+
+
+def _as_string_list(value: Any) -> list[str] | None:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, tuple):
+        return [str(item) for item in value]
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return [str(value.item())]
+        return [str(item) for item in value.tolist()]
+    return None
 
 
 def _slerp_wxyz(key_times: np.ndarray, quaternions_wxyz: np.ndarray, target_times: np.ndarray) -> np.ndarray:
@@ -404,6 +434,85 @@ class SonicImporter(DatasetImporter):
         )
 
 
+class MotionTrackingNpzImporter(DatasetImporter):
+    format_name = "motion_tracking_npz"
+
+    def can_handle(self, path: Path) -> bool:
+        return path.is_file() and path.suffix.lower() == ".npz" and self._sniff_motion_payload(path)
+
+    def scan_items(self, path: Path) -> list[ScanItem]:
+        candidates: list[Path] = []
+        if path.is_file() and self.can_handle(path):
+            candidates.append(path)
+        elif path.is_dir():
+            candidates.extend(candidate for candidate in path.rglob("*.npz") if self.can_handle(candidate))
+        return [
+            ScanItem(
+                path=str(candidate),
+                name=candidate.stem,
+                format="motion_tracking_npz",
+                item_type="file",
+            )
+            for candidate in sorted(dict.fromkeys(candidates))
+        ]
+
+    def load(self, path: Path) -> StateSequence:
+        payload = self._load_payload(path)
+        fps = float(np.asarray(payload["fps"]).item())
+        joint_positions = np.asarray(payload["dof_pos"], dtype=float)
+        root_translation = np.asarray(payload["root_pos"], dtype=float)
+        root_rotation = np.asarray(payload["root_rot"], dtype=float)
+        body_positions = np.asarray(payload["local_body_pos"], dtype=float)
+        joint_names = _as_string_list(payload["joint_names"])
+        body_names = _as_string_list(payload["body_names"])
+
+        if joint_positions.ndim == 1:
+            joint_positions = joint_positions[None, :]
+        if root_translation.ndim == 1:
+            root_translation = root_translation[None, :]
+        if root_rotation.ndim == 1:
+            root_rotation = root_rotation[None, :]
+        if body_positions.ndim == 2 and body_positions.shape[1] % 3 == 0:
+            body_positions = _reshape_body_array(body_positions, 3)
+
+        if root_rotation.shape[1] != 4:
+            raise ValueError(f"motion_tracking_npz root_rot must have shape (T, 4), got {root_rotation.shape}")
+        root_rotation = _xyzw_to_wxyz(_normalize_quaternions(root_rotation))
+
+        return _sequence_from_arrays(
+            name=path.stem,
+            source_format="motion_tracking_npz",
+            source_path=path,
+            fps=fps,
+            joint_positions=joint_positions,
+            root_translation=root_translation,
+            root_rotation_wxyz=root_rotation,
+            body_positions=body_positions,
+            joint_names=joint_names,
+            body_names=body_names,
+            metadata={
+                "keys": sorted(payload.keys()),
+                "original_suffix": ".npz",
+                "root_rot_order": "xyzw",
+            },
+        )
+
+    def _load_payload(self, path: Path) -> dict[str, np.ndarray]:
+        with np.load(path, allow_pickle=True) as npz_file:
+            payload = {key: npz_file[key] for key in npz_file.files}
+        missing = MOTION_TRACKING_NPZ_REQUIRED_KEYS.difference(payload)
+        if missing:
+            raise ValueError(f"Missing motion_tracking_npz keys in {path}: {sorted(missing)}")
+        return payload
+
+    def _sniff_motion_payload(self, path: Path) -> bool:
+        try:
+            with np.load(path, allow_pickle=True) as npz_file:
+                return MOTION_TRACKING_NPZ_REQUIRED_KEYS.issubset(npz_file.files)
+        except Exception:
+            return False
+
+
 class Twist2Importer(DatasetImporter):
     format_name = "twist2"
 
@@ -484,11 +593,11 @@ class Twist2Importer(DatasetImporter):
             if body_rotations.ndim == 2 and body_rotations.shape[1] % 4 == 0:
                 body_rotations = _reshape_body_array(body_rotations, 4)
 
-        joint_names = payload.get("joint_names")
-        if not isinstance(joint_names, list):
+        joint_names = _as_string_list(payload.get("joint_names"))
+        if joint_names is None:
             joint_names = CANONICAL_G1_JOINT_NAMES_29[: joint_positions.shape[1]]
-        body_names = payload.get("link_body_list")
-        if not isinstance(body_names, list):
+        body_names = _as_string_list(payload.get("link_body_list"))
+        if body_names is None:
             body_names = [f"body_{idx}" for idx in range(body_positions.shape[1])] if body_positions is not None else []
 
         metadata = {
@@ -560,6 +669,14 @@ class Twist2Importer(DatasetImporter):
 
     def _sniff_motion_payload(self, path: Path) -> bool:
         try:
+            if path.suffix.lower() == ".npz":
+                with np.load(path, allow_pickle=True) as npz_file:
+                    keys = set(npz_file.files)
+                if MOTION_TRACKING_NPZ_REQUIRED_KEYS.issubset(keys):
+                    return False
+                if {"root_pos", "root_rot", "dof_pos"}.issubset(keys):
+                    return True
+                return {"root_trans_offset", "root_rot", "dof"}.issubset(keys)
             payload = self._unwrap_payload(self._load_payload(path))
         except Exception:
             return False
@@ -663,7 +780,12 @@ class KimodoCsvImporter(DatasetImporter):
         return rows_seen > 0
 
 
-IMPORTERS: list[DatasetImporter] = [SonicImporter(), Twist2Importer(), KimodoCsvImporter()]
+IMPORTERS: list[DatasetImporter] = [
+    SonicImporter(),
+    MotionTrackingNpzImporter(),
+    Twist2Importer(),
+    KimodoCsvImporter(),
+]
 
 
 def detect_format(path: Path) -> str | None:

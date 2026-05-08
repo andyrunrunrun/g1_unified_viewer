@@ -45,6 +45,25 @@ def _write_kimodo_csv(path: Path, frame_count: int = 3) -> np.ndarray:
     return qpos
 
 
+def _write_motion_tracking_npz(path: Path, frame_count: int = 3) -> None:
+    root_pos = np.zeros((frame_count, 3), dtype=np.float32)
+    root_pos[:, 2] = 0.78
+    root_rot_xyzw = np.zeros((frame_count, 4), dtype=np.float32)
+    root_rot_xyzw[:, 3] = 1.0
+    dof_pos = np.arange(frame_count * 29, dtype=np.float32).reshape(frame_count, 29) * 0.01
+    local_body_pos = np.arange(frame_count * 38 * 3, dtype=np.float32).reshape(frame_count, 38, 3) * 0.001
+    np.savez(
+        path,
+        fps=np.float64(50.0),
+        root_pos=root_pos,
+        root_rot=root_rot_xyzw,
+        dof_pos=dof_pos,
+        local_body_pos=local_body_pos,
+        joint_names=np.asarray([f"joint_{idx}" for idx in range(29)]),
+        body_names=np.asarray([f"body_{idx}" for idx in range(38)]),
+    )
+
+
 class PolicyPluginRegistryTest(unittest.TestCase):
     def test_discovers_policy_json_inside_policy_plugin_folders(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -527,6 +546,34 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(sequence.frames[0].root_rotation_wxyz, [1.0, 0.0, 0.0, 0.0])
         self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[0], 0.70710678)
         self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[3], 0.70710678)
+
+    def test_motion_tracking_npz_loader_preserves_schema_names(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "tracking_motion.npz"
+            _write_motion_tracking_npz(motion_path)
+
+            self.assertEqual(importer_detect_format(motion_path), "motion_tracking_npz")
+            sequence = load_sequence(str(motion_path))
+
+        self.assertEqual(sequence.source_format, "motion_tracking_npz")
+        self.assertEqual(sequence.fps, 50.0)
+        self.assertEqual(sequence.frame_count, 3)
+        self.assertEqual(sequence.joint_names, [f"joint_{idx}" for idx in range(29)])
+        self.assertEqual(sequence.body_names, [f"body_{idx}" for idx in range(38)])
+        self.assertEqual(sequence.frames[0].root_rotation_wxyz, [1.0, 0.0, 0.0, 0.0])
+        self.assertEqual(len(sequence.frames[0].joint_positions), 29)
+        self.assertEqual(len(sequence.frames[0].body_positions), 38)
+
+    def test_motion_tracking_npz_scan_does_not_duplicate_as_twist2(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "tracking_motion.npz"
+            _write_motion_tracking_npz(motion_path)
+
+            items = self.controller.scan_path(temp_dir)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].format, "motion_tracking_npz")
+        self.assertEqual(items[0].path, str(motion_path.resolve()))
 
     def test_kimodo_csv_loader_detects_and_resamples_g1_qpos_csv(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1277,6 +1324,38 @@ class BrowserApiTest(unittest.TestCase):
             self.assertEqual(nodes[0]["node_type"], "motion")
             self.assertEqual(nodes[0]["format"], "twist2")
 
+    def test_browser_list_detects_motion_tracking_npz_by_schema(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            motion_file = temp_root / "tracking_motion.npz"
+            _write_motion_tracking_npz(motion_file)
+
+            response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            nodes = response.json()["nodes"]
+            self.assertEqual(len(nodes), 1)
+            self.assertEqual(nodes[0]["name"], "tracking_motion.npz")
+            self.assertEqual(nodes[0]["node_type"], "motion")
+            self.assertEqual(nodes[0]["format"], "motion_tracking_npz")
+
+    def test_browser_list_detects_motion_tracking_dataset_npz_by_sidecar_metadata(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            (temp_root / "meta_motion.json").write_text("{}")
+            (temp_root / "id_label.json").write_text("[]")
+            motion_file = temp_root / "tracking_motion.npz"
+            motion_file.write_bytes(b"not loaded during browser scan")
+
+            response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            nodes = response.json()["nodes"]
+            self.assertEqual(len(nodes), 1)
+            self.assertEqual(nodes[0]["name"], "tracking_motion.npz")
+            self.assertEqual(nodes[0]["node_type"], "motion")
+            self.assertEqual(nodes[0]["format"], "motion_tracking_npz")
+
     def test_browser_list_detects_kimodo_csv_motion_by_extension_without_sniffing_payloads(self) -> None:
         with TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -1352,7 +1431,53 @@ class TrimExportApiTest(unittest.TestCase):
             self.assertTrue(output_path.exists())
             self.assertFalse((output_dir / "twist2").exists())
 
-    def test_trim_export_defaults_kimodo_csv_to_sonic_output(self) -> None:
+    def test_trim_export_uses_custom_output_name(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            sequence = self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "export_format": "kimodo_csv",
+                    "output_dir": str(output_dir),
+                    "output_name": "demo clip/unsafe name.csv",
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertEqual(output_path.name, "demo_clip_unsafe_name.csv")
+            self.assertTrue(output_path.exists())
+
+    def test_trim_export_defaults_output_name_to_source_motion_name(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            sequence = self.controller.load_clip(str(TWIST2_SAMPLE), "twist2")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "export_format": "motion_tracking_npz",
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            output_path = Path(response.json()["output_path"])
+            self.assertEqual(output_path.name, f"{sequence.name}.npz")
+            self.assertNotIn("_trim_0_1", output_path.name)
+            self.assertTrue(output_path.exists())
+
+    def test_trim_export_defaults_kimodo_csv_to_same_format_output(self) -> None:
         with TemporaryDirectory() as temp_dir:
             motion_path = Path(temp_dir) / "kimodo_motion.csv"
             qpos = _write_kimodo_csv(motion_path, frame_count=3)
@@ -1372,11 +1497,141 @@ class TrimExportApiTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             payload = response.json()
             output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "kimodo_csv")
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertEqual(output_path.suffix, ".csv")
+            exported_qpos = np.loadtxt(output_path, delimiter=",")
+            self.assertEqual(exported_qpos.shape, (2, 36))
+            np.testing.assert_allclose(exported_qpos[0], qpos[0], atol=1e-6)
+
+    def test_trim_export_can_force_kimodo_csv_to_sonic_output(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "kimodo_motion.csv"
+            qpos = _write_kimodo_csv(motion_path, frame_count=3)
+            sequence = self.controller.load_clip(str(motion_path), "kimodo_csv")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "export_format": "sonic",
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
             self.assertEqual(payload["export_format"], "sonic")
             self.assertEqual(output_path.parent, output_dir)
             self.assertTrue((output_path / "joint_pos.csv").exists())
             joint_pos = np.loadtxt(output_path / "joint_pos.csv", delimiter=",", skiprows=1)
             np.testing.assert_allclose(joint_pos[0], qpos[0, 7:][np.argsort(SONIC_TO_MUJOCO_29)])
+
+    def test_trim_export_can_force_kimodo_csv_to_custom_output_dir(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "kimodo_motion.csv"
+            qpos = _write_kimodo_csv(motion_path, frame_count=3)
+            sequence = self.controller.load_clip(str(motion_path), "kimodo_csv")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "export_format": "kimodo_csv",
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "kimodo_csv")
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertEqual(output_path.suffix, ".csv")
+            self.assertFalse((output_dir / "kimodo_csv").exists())
+            exported_qpos = np.loadtxt(output_path, delimiter=",")
+            self.assertEqual(exported_qpos.shape, (2, 36))
+            np.testing.assert_allclose(exported_qpos[0], qpos[0], atol=1e-6)
+
+    def test_trim_export_defaults_motion_tracking_npz_to_same_schema(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "tracking_motion.npz"
+            _write_motion_tracking_npz(motion_path, frame_count=3)
+            sequence = self.controller.load_clip(str(motion_path), "motion_tracking_npz")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 1,
+                    "end_frame": 2,
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "motion_tracking_npz")
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertEqual(output_path.suffix, ".npz")
+            self.assertFalse((output_dir / "motion_tracking_npz").exists())
+            with np.load(output_path, allow_pickle=True) as data:
+                self.assertEqual(
+                    set(data.files),
+                    {
+                        "fps",
+                        "root_pos",
+                        "root_rot",
+                        "dof_pos",
+                        "local_body_pos",
+                        "joint_names",
+                        "body_names",
+                    },
+                )
+                self.assertEqual(data["root_pos"].shape, (2, 3))
+                self.assertEqual(data["root_rot"].shape, (2, 4))
+                self.assertEqual(data["dof_pos"].shape, (2, 29))
+                self.assertEqual(data["local_body_pos"].shape, (2, 38, 3))
+                self.assertEqual(data["joint_names"].tolist(), [f"joint_{idx}" for idx in range(29)])
+                self.assertEqual(data["body_names"].tolist(), [f"body_{idx}" for idx in range(38)])
+
+    def test_trim_export_can_force_motion_tracking_npz_from_kimodo_source(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "kimodo_motion.csv"
+            _write_kimodo_csv(motion_path, frame_count=3)
+            sequence = self.controller.load_clip(str(motion_path), "kimodo_csv")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "export_format": "motion_tracking_npz",
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "motion_tracking_npz")
+            self.assertEqual(output_path.parent, output_dir)
+            with np.load(output_path, allow_pickle=True) as data:
+                self.assertEqual(data["root_pos"].shape, (2, 3))
+                self.assertEqual(data["root_rot"].shape, (2, 4))
+                self.assertEqual(data["dof_pos"].shape, (2, 29))
+                self.assertEqual(data["joint_names"].shape, (29,))
 
 
 class PolicyStepSnapshotTest(unittest.TestCase):

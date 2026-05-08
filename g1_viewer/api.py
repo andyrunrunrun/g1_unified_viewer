@@ -435,6 +435,7 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
                 export_format=request.export_format,
                 twist2_extension=request.twist2_extension,
                 use_format_subdir=request.output_dir is None,
+                output_name=request.output_name,
             )
             frame_count = request.end_frame - request.start_frame + 1
             return TrimExportResponse(

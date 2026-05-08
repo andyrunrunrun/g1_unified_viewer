@@ -592,6 +592,80 @@ input[type="range"] {
   background: color-mix(in srgb, var(--danger) 8%, var(--surface-2) 92%);
 }
 
+.export-toast {
+  position: fixed;
+  top: 86px;
+  right: 22px;
+  z-index: 80;
+  width: min(460px, calc(100vw - 32px));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line) 64%);
+  border-radius: 18px;
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 54%),
+    color-mix(in srgb, var(--surface-2) 92%, black 8%);
+  box-shadow:
+    0 18px 44px -22px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.export-toast-indicator {
+  width: 11px;
+  height: 11px;
+  margin-top: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.export-toast-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.export-toast-copy strong {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.export-toast-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.export-toast-close {
+  min-height: 28px;
+  width: 28px;
+  padding: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.export-toast-enter-active,
+.export-toast-leave-active {
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.export-toast-enter-from,
+.export-toast-leave-to {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.98);
+}
+
 .stat {
   padding: 11px 12px;
 }
@@ -1422,10 +1496,6 @@ input[type="range"] {
   background: var(--surface-2);
 }
 
-.motion-start-transition-toggle {
-  background: linear-gradient(135deg, rgba(76, 126, 166, 0.18), rgba(123, 169, 212, 0.1)), var(--surface-2);
-}
-
 .toggle-copy {
   min-width: 0;
   display: grid;
@@ -1453,8 +1523,23 @@ input[type="range"] {
   background: var(--surface-2);
 }
 
+.motion-start-transition-toggle {
+  border-color: color-mix(in srgb, var(--accent-2) 36%, var(--line) 64%);
+  background: color-mix(in srgb, var(--surface-2) 88%, var(--accent-2) 12%);
+}
+
+.motion-start-transition-toggle .toggle-copy strong {
+  color: color-mix(in srgb, var(--accent-2) 78%, var(--ink) 22%);
+}
+
 .target-smoothing-panel {
-  background: linear-gradient(135deg, rgba(217, 178, 110, 0.16), rgba(159, 118, 64, 0.08)), var(--surface-2);
+  border-color: color-mix(in srgb, var(--amber) 40%, var(--line) 60%);
+  background: color-mix(in srgb, var(--surface-2) 88%, var(--amber) 12%);
+}
+
+.target-smoothing-panel .toggle-copy strong,
+.target-smoothing-alpha .alpha-value {
+  color: var(--amber);
 }
 
 .target-smoothing-body {

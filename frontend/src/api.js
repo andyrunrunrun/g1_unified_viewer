@@ -1,18 +1,18 @@
-export async function fetchJson(url) {
-  const response = await fetch(url, { cache: 'no-store' });
+export async function fetchJson(url, options = {}) {
+  const response = await fetch(url, { cache: 'no-store', signal: options.signal });
   if (!response.ok) {
     throw new Error(await response.text());
   }
   return response.json();
 }
 
-export async function postJson(url, payload) {
-  const options = { method: 'POST' };
+export async function postJson(url, payload, options = {}) {
+  const fetchOptions = { method: 'POST', signal: options.signal };
   if (payload !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
-    options.body = JSON.stringify(payload);
+    fetchOptions.headers = { 'Content-Type': 'application/json' };
+    fetchOptions.body = JSON.stringify(payload);
   }
-  const response = await fetch(url, options);
+  const response = await fetch(url, fetchOptions);
   if (!response.ok) {
     throw new Error(await response.text());
   }

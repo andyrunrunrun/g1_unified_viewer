@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field, root_validator
 
 
 SourceType = Literal["dataset", "policy"]
-MotionFormat = Literal["sonic", "twist2", "kimodo_csv", "policy"]
-ExportMotionFormat = Literal["sonic", "twist2"]
+MotionFormat = Literal["sonic", "twist2", "motion_tracking_npz", "kimodo_csv", "policy"]
+ExportMotionFormat = Literal["sonic", "twist2", "motion_tracking_npz", "kimodo_csv"]
 Twist2ExportExtension = Literal[".pkl", ".npz", ".json"]
 PlaybackState = Literal["empty", "stopped", "paused", "playing"]
 ViewMode = Literal["dataset", "policy"]
@@ -189,6 +189,7 @@ class TrimExportRequest(BaseModel):
     end_frame: int
     export_format: ExportMotionFormat | None = None
     output_dir: str | None = None
+    output_name: str | None = None
     twist2_extension: Twist2ExportExtension | None = None
 
 

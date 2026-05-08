@@ -963,6 +963,95 @@ test('contact summary classifies foot contacts and normal forces', () => {
   assert.equal(viewer.markerSummary.points.length, 2);
 });
 
+test('contact summary releases MuJoCo contact vector handles after a single read', () => {
+  const viewer = Object.create(BrowserMujocoViewer.prototype);
+  viewer.bodyNames = ['world', 'left_ankle_roll_link', 'right_ankle_roll_link'];
+  viewer.model = {
+    nconmax: 64,
+    geom_bodyid: new Int32Array([0, 1, 2])
+  };
+  let contactReads = 0;
+  let contactDeletes = 0;
+  let contactHandleDeletes = 0;
+  viewer.data = {
+    ncon: 2,
+    get contact() {
+      contactReads += 1;
+      return {
+        get(index) {
+          return [
+            {
+              geom1: 0,
+              geom2: 1,
+              pos: [1, 2, 3],
+              delete() {
+                contactHandleDeletes += 1;
+              }
+            },
+            {
+              geom1: 0,
+              geom2: 2,
+              pos: [4, 5, 6],
+              delete() {
+                contactHandleDeletes += 1;
+              }
+            }
+          ][index];
+        },
+        delete() {
+          contactDeletes += 1;
+        }
+      };
+    }
+  };
+  viewer.mujoco = {
+    mj_contactForce(_model, _data, index, out) {
+      out[0] = index === 0 ? 12 : 8;
+    }
+  };
+  viewer.setContactMarkers = () => {};
+
+  const summary = viewer.readContactSummary();
+
+  assert.equal(summary.points.length, 2);
+  assert.equal(contactReads, 1);
+  assert.equal(contactDeletes, 1);
+  assert.equal(contactHandleDeletes, 2);
+});
+
+test('contact summary skips corrupted contact counts before reading MuJoCo contacts', () => {
+  const viewer = Object.create(BrowserMujocoViewer.prototype);
+  viewer.bodyNames = ['world', 'left_ankle_roll_link'];
+  viewer.model = {
+    nconmax: 64,
+    geom_bodyid: new Int32Array([0, 1])
+  };
+  let contactReads = 0;
+  viewer.data = {
+    ncon: 2 ** 31,
+    get contact() {
+      contactReads += 1;
+      throw new Error('contact getter should not be reached for invalid ncon');
+    }
+  };
+  viewer.mujoco = {
+    mj_contactForce() {
+      throw new Error('contact force should not be reached for invalid ncon');
+    }
+  };
+  let markerCalls = 0;
+  viewer.setContactMarkers = () => {
+    markerCalls += 1;
+  };
+
+  const summary = viewer.readContactSummary();
+
+  assert.equal(summary.count, 0);
+  assert.equal(summary.points.length, 0);
+  assert.equal(contactReads, 0);
+  assert.equal(markerCalls, 1);
+});
+
 test('contact summary reads normal forces through MuJoCo DoubleBuffer bindings', () => {
   const viewer = Object.create(BrowserMujocoViewer.prototype);
   viewer.bodyNames = ['world', 'left_ankle_roll_link'];

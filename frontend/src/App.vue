@@ -150,14 +150,14 @@
             </button>
           </div>
           <label id="motionStartTransitionToggle" class="toggle-row motion-start-transition-toggle">
-            <input v-model="motionStartTransitionEnabled" type="checkbox" />
+            <input v-model="motionStartTransitionEnabled" type="checkbox" :disabled="!session?.physics_enabled" />
             <span class="toggle-copy">
               <strong>{{ t('motion.startTransition') }}</strong>
               <small>{{ t(motionStartTransitionEnabled ? 'motion.startTransitionOn' : 'motion.startTransitionOff') }}</small>
             </span>
           </label>
           <div class="target-smoothing-control target-smoothing-panel">
-            <input id="targetSmoothingToggle" v-model="targetSmoothingEnabled" type="checkbox" />
+            <input id="targetSmoothingToggle" v-model="targetSmoothingEnabled" type="checkbox" :disabled="!session?.physics_enabled" />
             <div class="target-smoothing-body">
               <label class="toggle-copy" for="targetSmoothingToggle">
                 <strong>{{ t('motion.targetSmoothing') }}</strong>
@@ -174,7 +174,7 @@
                   min="0.01"
                   max="1"
                   step="0.01"
-                  :disabled="!targetSmoothingEnabled"
+                  :disabled="!targetSmoothingEnabled || !session?.physics_enabled"
                 />
               </label>
             </div>
@@ -188,8 +188,28 @@
             <p>{{ t('trim.subtitle') }}</p>
           </div>
           <div class="two-col">
-            <input id="trimStartInput" v-model.number="trimStartInput" type="number" min="0" :max="maxFrame" :disabled="!activeSequence" @change="setTrimStart" />
-            <input id="trimEndInput" v-model.number="trimEndInput" type="number" min="0" :max="maxFrame" :disabled="!activeSequence" @change="setTrimEnd" />
+            <input
+              id="trimStartInput"
+              v-model.number="trimStartInput"
+              type="number"
+              min="0"
+              :max="maxFrame"
+              :disabled="!activeSequence"
+              @focus="beginTrimFrameEdit('start')"
+              @keyup.enter="commitTrimStart"
+              @blur="commitTrimStart"
+            />
+            <input
+              id="trimEndInput"
+              v-model.number="trimEndInput"
+              type="number"
+              min="0"
+              :max="maxFrame"
+              :disabled="!activeSequence"
+              @focus="beginTrimFrameEdit('end')"
+              @keyup.enter="commitTrimEnd"
+              @blur="commitTrimEnd"
+            />
           </div>
           <div class="two-col">
             <button id="markTrimStartButton" class="command-button ghost" :disabled="!activeSequence" @click="runCommand(() => postJson('/api/session/trim', { action: 'mark_start' }), 'trim.markStartDone')">
@@ -207,6 +227,8 @@
               <select id="exportFormatSelect" v-model="exportFormat" :disabled="!activeSequence">
                 <option value="sonic">sonic</option>
                 <option value="twist2">twist2</option>
+                <option value="motion_tracking_npz">motion_tracking_npz</option>
+                <option value="kimodo_csv">kimodo_csv</option>
               </select>
             </label>
             <label class="field">
@@ -221,6 +243,10 @@
           <label class="field">
             <span>{{ t('trim.outputFolder') }}</span>
             <input id="exportOutputDirInput" v-model="exportOutputDir" type="text" :placeholder="t('trim.outputPlaceholder')" :disabled="!activeSequence" />
+          </label>
+          <label class="field">
+            <span>{{ t('trim.outputName') }}</span>
+            <input id="exportOutputNameInput" v-model="exportOutputName" type="text" :placeholder="activeSequence?.name || t('trim.outputNamePlaceholder')" :disabled="!activeSequence" />
           </label>
           <div id="trimSummary" class="note">{{ t('trim.summary', { start: session?.trim_start ?? 0, end: session?.trim_end ?? 0 }) }}</div>
           <button id="exportButton" class="command-button secondary" :disabled="!activeSequence" @click="runCommand(exportTrim, 'trim.exportDone')">
@@ -482,6 +508,25 @@
         </details>
       </aside>
     </main>
+
+    <transition name="export-toast">
+      <aside
+        v-if="exportToast.visible"
+        id="exportToast"
+        class="export-toast"
+        role="status"
+        aria-live="polite"
+      >
+        <div class="export-toast-indicator" aria-hidden="true"></div>
+        <div class="export-toast-copy">
+          <strong>{{ t('trim.exportSuccess') }}</strong>
+          <span>{{ exportToast.path }}</span>
+        </div>
+        <button id="exportToastClose" class="export-toast-close" type="button" :aria-label="t('trim.dismissExportToast')" @click="dismissExportToast">
+          ×
+        </button>
+      </aside>
+    </transition>
   </div>
 </template>
 
@@ -548,9 +593,17 @@ const browserParent = ref(null);
 const frameInput = ref(0);
 const trimStartInput = ref(0);
 const trimEndInput = ref(0);
+const editingTrimStart = ref(false);
+const editingTrimEnd = ref(false);
 const exportFormat = ref('sonic');
 const twist2Extension = ref('.pkl');
 const exportOutputDir = ref('');
+const exportOutputName = ref('');
+const lastExportOutputSequenceId = ref(null);
+const exportToast = reactive({
+  visible: false,
+  path: ''
+});
 const recordingFileName = ref('g1-viewer-recording');
 const recordingMimeType = ref('video/mp4');
 const globalReferenceOverlayEnabled = ref(false);
@@ -596,6 +649,7 @@ const globalReferenceAnchor = reactive({
 const SESSION_POLL_INTERVAL_MS = 500;
 const POLICY_PLUGIN_REFRESH_INTERVAL_MS = 5000;
 const LOCAL_PLAYBACK_RENDER_INTERVAL_MS = 30;
+const FRAME_CACHE_CHUNK_SIZE = 240;
 const DEFAULT_BROWSER_PHYSICS_CONTROL_DT = 0.02;
 const MOCK_BROWSER_POLICY_ID = 'mock_passthrough';
 const ACTIVE_BROWSER_MOTION_NAME = 'active_clip';
@@ -696,8 +750,12 @@ const UI_MESSAGES = Object.freeze({
       twist2Extension: 'twist2 后缀',
       outputFolder: '输出文件夹',
       outputPlaceholder: '留空使用默认 exports 目录',
+      outputName: '导出文件名',
+      outputNamePlaceholder: '默认使用当前动作名',
       summary: '裁剪区间: {start} 至 {end}',
       export: '导出裁剪',
+      exportSuccess: '导出成功',
+      dismissExportToast: '关闭导出提示',
       markStartDone: '已标记裁剪起点。',
       markEndDone: '已标记裁剪终点。',
       startUpdated: '已更新裁剪起点。',
@@ -915,8 +973,12 @@ const UI_MESSAGES = Object.freeze({
       twist2Extension: 'twist2 suffix',
       outputFolder: 'Output folder',
       outputPlaceholder: 'Leave blank to use the default exports folder',
+      outputName: 'Output name',
+      outputNamePlaceholder: 'Defaults to current motion name',
       summary: 'Trim range: {start} to {end}',
       export: 'Export Trim',
+      exportSuccess: 'Export complete',
+      dismissExportToast: 'Dismiss export notification',
       markStartDone: 'Trim start marked.',
       markEndDone: 'Trim end marked.',
       startUpdated: 'Trim start updated.',
@@ -1047,13 +1109,16 @@ const UI_MESSAGES = Object.freeze({
 let pollHandle = null;
 let policyRefreshHandle = null;
 let playbackFrameHandle = null;
+let exportToastTimer = null;
 let physicsLoopPromise = null;
 let viewer = null;
 let lastPolicySelectionSignature = '';
 let frameCacheRequestToken = 0;
+let frameCacheAbortController = null;
 const browserPolicyRuntime = createBrowserPolicyRuntime();
 let frameCache = {
   sequenceId: null,
+  loadingSequenceId: null,
   jointNames: [],
   bodyNames: [],
   frames: []
@@ -1273,6 +1338,23 @@ function setStatus(target, message, error = false) {
     return;
   }
   target.value = { text: String(message ?? ''), error };
+}
+
+function dismissExportToast() {
+  if (exportToastTimer) {
+    window.clearTimeout(exportToastTimer);
+    exportToastTimer = null;
+  }
+  exportToast.visible = false;
+}
+
+function showExportToast(path) {
+  if (exportToastTimer) {
+    window.clearTimeout(exportToastTimer);
+  }
+  exportToast.path = String(path || '');
+  exportToast.visible = true;
+  exportToastTimer = window.setTimeout(dismissExportToast, 4000);
 }
 
 function t(key, params = {}) {
@@ -1513,8 +1595,18 @@ function syncInputsFromSession() {
     viewerFrameIndex.value = session.value.current_frame;
   }
   frameInput.value = viewerFrameIndex.value;
-  trimStartInput.value = session.value.trim_start;
-  trimEndInput.value = session.value.trim_end;
+  if (!editingTrimStart.value) {
+    trimStartInput.value = session.value.trim_start;
+  }
+  if (!editingTrimEnd.value) {
+    trimEndInput.value = session.value.trim_end;
+  }
+  const sequence = activeSequence.value;
+  const sequenceId = sequence?.sequence_id ?? null;
+  if (sequenceId !== lastExportOutputSequenceId.value) {
+    lastExportOutputSequenceId.value = sequenceId;
+    exportOutputName.value = sequence?.name ?? '';
+  }
 }
 
 function syncPolicyCardStates() {
@@ -1577,7 +1669,7 @@ function framePayloadForIndex(frameIndex) {
   if (!activeSequence.value || frameCache.sequenceId !== activeSequence.value.sequence_id) {
     return null;
   }
-  const boundedFrame = Math.min(Math.max(Number(frameIndex) || 0, 0), frameCache.frames.length - 1);
+  const boundedFrame = Math.min(Math.max(Number(frameIndex) || 0, 0), maxFrame.value);
   const state = frameCache.frames[boundedFrame];
   if (!state) {
     return null;
@@ -1622,8 +1714,21 @@ function applyPolicyOutput(output, frameIndex = viewerFrameIndex.value) {
   return true;
 }
 
+function cachedFrameCount() {
+  return frameCache.frames.filter(Boolean).length;
+}
+
+function frameCacheReadyForActiveSequence() {
+  return Boolean(
+    activeSequence.value
+    && frameCache.sequenceId === activeSequence.value.sequence_id
+    && !frameCache.loadingSequenceId
+    && cachedFrameCount() >= activeSequence.value.frame_count
+  );
+}
+
 function updateMotionStartDifficulty() {
-  if (!frameCache.frames.length) {
+  if (!frameCacheReadyForActiveSequence()) {
     evaluationTelemetry.startDifficulty = null;
     return null;
   }
@@ -1866,6 +1971,9 @@ function currentTrackingReferencePayload() {
 }
 
 async function prepareBrowserTrackingMotion() {
+  if (!frameCacheReadyForActiveSequence()) {
+    throw new Error(t('motion.framesRequired'));
+  }
   await ensureBrowserPolicyActive();
   normalizeFrameCacheAsMotionClip(frameCache);
   browserPolicyRuntime.setMotionClip(ACTIVE_BROWSER_MOTION_NAME, frameCache);
@@ -2239,6 +2347,9 @@ async function startBrowserPhysicsLoop(targetMode = 'tracking') {
   if (!activeSequence.value || frameCache.sequenceId !== activeSequence.value.sequence_id || !viewer) {
     return;
   }
+  if (targetMode !== 'default_stance' && !frameCacheReadyForActiveSequence()) {
+    throw new Error(t('motion.framesRequired'));
+  }
   stopLocalPlaybackLoop();
   const previousMode = browserPhysics.targetMode;
   const startFrame = viewerFrameIndex.value;
@@ -2368,7 +2479,7 @@ function syncViewerFromSession() {
   } else {
     stopLocalPlaybackLoop();
     if (applyCachedFrame(session.value?.current_frame ?? 0)) {
-      viewerStatus.value = makeStatus('viewer.cachedFrames', { count: frameCache.frames.length });
+      viewerStatus.value = makeStatus('viewer.cachedFrames', { count: cachedFrameCount() });
       if ((session.value?.current_frame ?? 0) === 0) {
         scheduleGlobalReferenceRootSync('motion_start');
       }
@@ -2376,17 +2487,26 @@ function syncViewerFromSession() {
   }
 }
 
+function cancelFrameCacheRequest() {
+  frameCacheAbortController?.abort();
+  frameCacheAbortController = null;
+}
+
 async function loadFrameCacheForActiveSequence() {
   const sequence = activeSequence.value;
-  if (!sequence || frameCache.sequenceId === sequence.sequence_id) {
+  if (!sequence || frameCache.sequenceId === sequence.sequence_id || frameCache.loadingSequenceId === sequence.sequence_id) {
     syncViewerFromSession();
     return;
   }
 
+  cancelFrameCacheRequest();
   const token = frameCacheRequestToken + 1;
   frameCacheRequestToken = token;
+  const controller = new AbortController();
+  frameCacheAbortController = controller;
   frameCache = {
     sequenceId: null,
+    loadingSequenceId: sequence.sequence_id,
     jointNames: [],
     bodyNames: [],
     frames: []
@@ -2395,30 +2515,54 @@ async function loadFrameCacheForActiveSequence() {
   viewerStatus.value = makeStatus('viewer.loadingFrames');
 
   try {
-    const payload = await postJson('/api/get_frames', {
-      sequence_id: sequence.sequence_id,
-      start: 0,
-      end: sequence.frame_count,
-      stride: 1
-    });
-    if (token !== frameCacheRequestToken) {
-      return;
+    for (let start = 0; start < sequence.frame_count; start += FRAME_CACHE_CHUNK_SIZE) {
+      const payload = await postJson('/api/get_frames', {
+        sequence_id: sequence.sequence_id,
+        start,
+        end: Math.min(sequence.frame_count, start + FRAME_CACHE_CHUNK_SIZE),
+        stride: 1
+      }, { signal: controller.signal });
+      if (token !== frameCacheRequestToken || controller.signal.aborted) {
+        return;
+      }
+      if (!frameCache.sequenceId) {
+        frameCache = {
+          sequenceId: payload.sequence_id,
+          loadingSequenceId: sequence.sequence_id,
+          jointNames: payload.joint_names || sequence.joint_names || [],
+          bodyNames: payload.body_names || sequence.body_names || [],
+          frames: []
+        };
+      }
+      frameCache.frames.splice(start, payload.frames.length, ...payload.frames);
+      if (start === 0) {
+        syncViewerFromSession();
+      }
+      viewerStatus.value = makeStatus('viewer.cachedFrames', {
+        count: cachedFrameCount()
+      });
+      await sleep(0);
     }
-    frameCache = {
-      sequenceId: payload.sequence_id,
-      jointNames: payload.joint_names || sequence.joint_names || [],
-      bodyNames: payload.body_names || sequence.body_names || [],
-      frames: payload.frames || []
-    };
+    frameCache.loadingSequenceId = null;
     if (browserPolicyIsActive()) {
       updateMotionStartDifficulty();
     }
     scheduleGlobalReferenceRootSync('motion_loaded');
-    viewerStatus.value = makeStatus('viewer.cachedFrames', { count: frameCache.frames.length });
+    viewerStatus.value = makeStatus('viewer.cachedFrames', { count: cachedFrameCount() });
     syncViewerFromSession();
   } catch (error) {
+    if (error?.name === 'AbortError') {
+      return;
+    }
     if (token === frameCacheRequestToken) {
       viewerStatus.value = error.message;
+    }
+  } finally {
+    if (frameCacheAbortController === controller) {
+      frameCacheAbortController = null;
+    }
+    if (token === frameCacheRequestToken && frameCache.loadingSequenceId === sequence.sequence_id) {
+      frameCache.loadingSequenceId = null;
     }
   }
 }
@@ -2427,7 +2571,7 @@ async function refreshSession() {
   try {
     session.value = await fetchJson('/api/session');
     renderSession();
-    await loadFrameCacheForActiveSequence();
+    void loadFrameCacheForActiveSequence();
   } catch (error) {
     setStatus(commandStatus, error.message, true);
   }
@@ -2485,9 +2629,11 @@ async function handleTreeNode(node) {
   }
   const wasPhysicsEnabled = Boolean(session.value?.physics_enabled);
   browserPhysics.switchingMotion = wasPhysicsEnabled;
+  cancelFrameCacheRequest();
   frameCacheRequestToken += 1;
   frameCache = {
     sequenceId: null,
+    loadingSequenceId: null,
     jointNames: [],
     bodyNames: [],
     frames: []
@@ -2567,6 +2713,26 @@ async function setTrimEnd() {
     () => postJson('/api/session/trim', { action: 'set_end', frame_index: Number(trimEndInput.value) }),
     'trim.endUpdated'
   );
+}
+
+function beginTrimFrameEdit(target) {
+  if (target === 'start') {
+    editingTrimStart.value = true;
+    return;
+  }
+  if (target === 'end') {
+    editingTrimEnd.value = true;
+  }
+}
+
+async function commitTrimStart() {
+  editingTrimStart.value = false;
+  await setTrimStart();
+}
+
+async function commitTrimEnd() {
+  editingTrimEnd.value = false;
+  await setTrimEnd();
 }
 
 async function togglePhysics() {
@@ -2817,7 +2983,7 @@ async function runPolicyComparison() {
   if (!session.value?.physics_enabled || !comparisonPolicyA.value || !comparisonPolicyB.value) {
     throw new Error(t('evaluation.comparisonRequired'));
   }
-  if (!activeSequence.value || !frameCache.frames.length) {
+  if (!frameCacheReadyForActiveSequence()) {
     throw new Error(t('motion.framesRequired'));
   }
   evaluationTelemetry.comparing = true;
@@ -2843,6 +3009,13 @@ async function runPolicyComparison() {
     }
   }
 }
+
+watch(() => session.value?.physics_enabled, (enabled) => {
+  if (!enabled) {
+    motionStartTransitionEnabled.value = false;
+    targetSmoothingEnabled.value = false;
+  }
+});
 
 watch([targetSmoothingEnabled, targetSmoothingAlpha], () => {
   configureBrowserTargetSmoothing();
@@ -2878,9 +3051,11 @@ async function exportTrim() {
     end_frame: Number(trimEndInput.value),
     export_format: exportFormat.value,
     output_dir: exportOutputDir.value.trim() || null,
+    output_name: exportOutputName.value.trim() || null,
     twist2_extension: exportFormat.value === 'twist2' ? twist2Extension.value : null
   });
   setStatus(commandStatus, makeStatus('trim.exportedTo', { path: payload.output_path }));
+  showExportToast(payload.output_path);
 }
 
 async function initViewer() {
@@ -2922,8 +3097,12 @@ onBeforeUnmount(() => {
   if (policyRefreshHandle) {
     window.clearInterval(policyRefreshHandle);
   }
+  if (exportToastTimer) {
+    window.clearTimeout(exportToastTimer);
+  }
   stopLocalPlaybackLoop();
   stopBrowserPhysicsLoop();
+  cancelFrameCacheRequest();
   if (evaluationTelemetry.recordingUrl) {
     URL.revokeObjectURL?.(evaluationTelemetry.recordingUrl);
   }

@@ -110,7 +110,9 @@ test('motion start transition toggle is compact and cannot stretch the motion pa
   assert.match(styles, /\.toggle-row\s*\{[\s\S]*border:\s*1px solid var\(--line\)/);
   assert.match(styles, /\.toggle-copy\s*\{[\s\S]*min-width:\s*0/);
   assert.match(styles, /\.toggle-copy small\s*\{[\s\S]*line-height:\s*1\.25/);
-  assert.match(styles, /\.motion-start-transition-toggle\s*\{[\s\S]*background:\s*linear-gradient\(135deg,\s*rgba\(76,\s*126,\s*166,\s*0\.18\),\s*rgba\(123,\s*169,\s*212,\s*0\.1\)\),\s*var\(--surface-2\)/);
+  assert.match(styles, /\.motion-start-transition-toggle\s*\{[\s\S]*border-color:\s*color-mix\(in srgb,\s*var\(--accent-2\)\s*36%,\s*var\(--line\)\s*64%\)/);
+  assert.match(styles, /\.motion-start-transition-toggle\s*\{[\s\S]*background:\s*color-mix\(in srgb,\s*var\(--surface-2\)\s*88%,\s*var\(--accent-2\)\s*12%\)/);
+  assert.match(styles, /\.motion-start-transition-toggle \.toggle-copy strong\s*\{[\s\S]*color:\s*color-mix\(in srgb,\s*var\(--accent-2\)\s*78%,\s*var\(--ink\)\s*22%\)/);
 });
 
 test('target smoothing control keeps alpha input compact inside the motion panel', () => {
@@ -132,7 +134,9 @@ test('target smoothing control keeps alpha input compact inside the motion panel
   assert.match(styles, /\.target-smoothing-alpha input\[type="range"\]::-moz-range-thumb\s*\{[\s\S]*width:\s*16px/);
   assert.match(styles, /\.alpha-value\s*\{[\s\S]*justify-self:\s*start/);
   assert.match(styles, /\.alpha-value\s*\{[\s\S]*font-variant-numeric:\s*tabular-nums/);
-  assert.match(styles, /\.target-smoothing-panel\s*\{[\s\S]*background:\s*linear-gradient\(135deg,\s*rgba\(217,\s*178,\s*110,\s*0\.16\),\s*rgba\(159,\s*118,\s*64,\s*0\.08\)\),\s*var\(--surface-2\)/);
+  assert.match(styles, /\.target-smoothing-panel\s*\{[\s\S]*border-color:\s*color-mix\(in srgb,\s*var\(--amber\)\s*40%,\s*var\(--line\)\s*60%\)/);
+  assert.match(styles, /\.target-smoothing-panel\s*\{[\s\S]*background:\s*color-mix\(in srgb,\s*var\(--surface-2\)\s*88%,\s*var\(--amber\)\s*12%\)/);
+  assert.match(styles, /\.target-smoothing-panel \.toggle-copy strong,\s*\.target-smoothing-alpha \.alpha-value\s*\{[\s\S]*color:\s*var\(--amber\)/);
 });
 
 test('timeline slider keeps a live progress fill while staying inset from the card edges', () => {

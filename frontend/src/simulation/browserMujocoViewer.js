@@ -15,6 +15,7 @@ const CONTACT_FORCE_ARROW_MAX = 0.55;
 const CONTACT_ARROW_COLOR_LEFT = 0x58c08d;
 const CONTACT_ARROW_COLOR_RIGHT = 0x6ea8c7;
 const CONTACT_ARROW_COLOR_OTHER = 0xd0a257;
+const CONTACT_SUMMARY_MAX_CONTACTS = 256;
 const REFERENCE_OVERLAY_COLOR = 0x7bd3ee;
 const REFERENCE_OVERLAY_OPACITY = 0.26;
 const RELATIVE_REFERENCE_OVERLAY_COLOR = 0xf2c86b;
@@ -583,15 +584,42 @@ function pushFootContact(summary, side, point) {
   target.slipping = target.slipping || point.slipping;
 }
 
+function safeContactCount(data, model) {
+  const rawCount = Number(data?.ncon ?? 0);
+  if (!Number.isFinite(rawCount) || rawCount <= 0) {
+    return 0;
+  }
+  const contactCount = Math.floor(rawCount);
+  const modelLimit = Number(model?.nconmax ?? 0);
+  if (Number.isFinite(modelLimit) && modelLimit > 0 && contactCount > modelLimit) {
+    return 0;
+  }
+  if (contactCount > CONTACT_SUMMARY_MAX_CONTACTS) {
+    return 0;
+  }
+  return contactCount;
+}
+
 function readContactSummaryFromData({ mujoco, model, data, bodyNames = [] } = {}) {
-  const contactCount = Math.max(0, Number(data?.ncon ?? 0));
+  const contactCount = safeContactCount(data, model);
   const summary = {
-    count: contactCount,
+    count: 0,
     leftFoot: emptyFootContact(),
     rightFoot: emptyFootContact(),
     points: []
   };
-  if (!contactCount || !data?.contact || !model) {
+  if (!contactCount || !model) {
+    return summary;
+  }
+
+  let contacts = null;
+  try {
+    contacts = data?.contact;
+  } catch {
+    return summary;
+  }
+  if (typeof contacts?.get !== 'function') {
+    contacts?.delete?.();
     return summary;
   }
 
@@ -600,39 +628,44 @@ function readContactSummaryFromData({ mujoco, model, data, bodyNames = [] } = {}
   const position = new THREE.Vector3();
   try {
     for (let index = 0; index < contactCount; index += 1) {
-      const contact = data.contact.get?.(index);
+      const contact = contacts.get(index);
       if (!contact) {
         continue;
       }
-      readContactForceInto({ mujoco, model, data, index, target: force, buffer: contactForceBuffer });
-      const geomIds = [Number(contact.geom1 ?? contact.geom?.[0] ?? -1), Number(contact.geom2 ?? contact.geom?.[1] ?? -1)];
-      const bodyIds = geomIds.map((geomId) => Number(model?.geom_bodyid?.[geomId] ?? -1));
-      const names = bodyIds.map((bodyId) => bodyNames?.[bodyId] || `body_${bodyId}`);
-      const normalForce = Math.max(0, Number(force[0] ?? 0));
-      const tangentForce = Math.hypot(Number(force[1] ?? 0), Number(force[2] ?? 0));
-      const side = classifyFootSide(names);
-      const friction = Math.max(
-        ...geomIds.map((geomId) => Number(model?.geom_friction?.[geomId * 3] ?? contact.friction?.[0] ?? 0)),
-        0
-      );
-      mujocoVectorToThree(contact.pos, position);
-      const point = {
-        index,
-        side,
-        active: normalForce > 1e-6,
-        normalForce,
-        tangentForce,
-        slipping: normalForce > 1e-6 && friction > 0 && tangentForce > normalForce * friction * 0.85,
-        position: [position.x, position.y, position.z],
-        geomIds,
-        bodyIds,
-        bodyNames: names
-      };
-      summary.points.push(point);
-      pushFootContact(summary, side, point);
+      try {
+        readContactForceInto({ mujoco, model, data, index, target: force, buffer: contactForceBuffer });
+        const geomIds = [Number(contact.geom1 ?? contact.geom?.[0] ?? -1), Number(contact.geom2 ?? contact.geom?.[1] ?? -1)];
+        const bodyIds = geomIds.map((geomId) => Number(model?.geom_bodyid?.[geomId] ?? -1));
+        const names = bodyIds.map((bodyId) => bodyNames?.[bodyId] || `body_${bodyId}`);
+        const normalForce = Math.max(0, Number(force[0] ?? 0));
+        const tangentForce = Math.hypot(Number(force[1] ?? 0), Number(force[2] ?? 0));
+        const side = classifyFootSide(names);
+        const friction = Math.max(
+          ...geomIds.map((geomId) => Number(model?.geom_friction?.[geomId * 3] ?? contact.friction?.[0] ?? 0)),
+          0
+        );
+        mujocoVectorToThree(contact.pos, position);
+        const point = {
+          index,
+          side,
+          active: normalForce > 1e-6,
+          normalForce,
+          tangentForce,
+          slipping: normalForce > 1e-6 && friction > 0 && tangentForce > normalForce * friction * 0.85,
+          position: [position.x, position.y, position.z],
+          geomIds,
+          bodyIds,
+          bodyNames: names
+        };
+        summary.points.push(point);
+        pushFootContact(summary, side, point);
+      } finally {
+        contact?.delete?.();
+      }
     }
   } finally {
     contactForceBuffer?.delete?.();
+    contacts?.delete?.();
   }
   summary.count = summary.points.length;
   return summary;

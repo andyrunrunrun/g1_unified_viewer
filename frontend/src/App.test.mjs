@@ -3,9 +3,17 @@ import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const source = readFileSync(new URL('./App.vue', import.meta.url), 'utf-8');
+const apiSource = readFileSync(new URL('./api.js', import.meta.url), 'utf-8');
+const stylesSource = readFileSync(new URL('./styles.css', import.meta.url), 'utf-8');
 const indexHtmlSource = readFileSync(new URL('../index.html', import.meta.url), 'utf-8');
 const viteConfigSource = readFileSync(new URL('../vite.config.mjs', import.meta.url), 'utf-8');
 const packageSource = readFileSync(new URL('../package.json', import.meta.url), 'utf-8');
+
+function cssBlock(selectorPattern, label = selectorPattern) {
+  const match = stylesSource.match(new RegExp(`${selectorPattern}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`));
+  assert.ok(match, `missing CSS block for ${label}`);
+  return match.groups.body;
+}
 
 function functionBody(name) {
   const match = source.match(new RegExp(`async function ${name}\\(\\) \\{(?<body>[\\s\\S]*?)\\n\\}`));
@@ -28,6 +36,39 @@ test('viewer uses cached browser frames instead of high-frequency session state 
   assert.match(source, /\/api\/get_frames/);
   assert.match(source, /startLocalPlayback\(/);
   assert.match(source, /pollHandle = window\.setInterval\(refreshSession, SESSION_POLL_INTERVAL_MS\)/);
+});
+
+test('motion frame cache loads in cancellable chunks without blocking session polling', () => {
+  assert.match(apiSource, /export async function postJson\(url,\s*payload,\s*options = \{\}\)/);
+  assert.match(apiSource, /signal:\s*options\.signal/);
+
+  assert.match(source, /const FRAME_CACHE_CHUNK_SIZE = \d+/);
+  assert.match(source, /let frameCacheAbortController = null/);
+  assert.match(source, /function cancelFrameCacheRequest\(\)/);
+  assert.match(source, /frameCacheAbortController\?\.abort\(\)/);
+
+  const refreshBody = functionBody('refreshSession');
+  assert.match(refreshBody, /void loadFrameCacheForActiveSequence\(\)/);
+  assert.doesNotMatch(refreshBody, /await loadFrameCacheForActiveSequence\(\)/);
+
+  const cacheBody = functionBody('loadFrameCacheForActiveSequence');
+  assert.match(cacheBody, /frameCache\.loadingSequenceId === sequence\.sequence_id/);
+  assert.match(cacheBody, /new AbortController\(\)/);
+  assert.match(cacheBody, /for \(let start = 0; start < sequence\.frame_count; start \+= FRAME_CACHE_CHUNK_SIZE\)/);
+  assert.match(cacheBody, /end:\s*Math\.min\(sequence\.frame_count,\s*start \+ FRAME_CACHE_CHUNK_SIZE\)/);
+  assert.match(cacheBody, /signal:\s*controller\.signal/);
+  assert.match(cacheBody, /token !== frameCacheRequestToken \|\| controller\.signal\.aborted/);
+  assert.match(cacheBody, /frameCache\.frames\.splice\(start,\s*payload\.frames\.length,\s*\.\.\.payload\.frames\)/);
+  assert.match(cacheBody, /await sleep\(0\)/);
+
+  assert.match(source, /function frameCacheReadyForActiveSequence\(\)/);
+  assert.match(source, /!frameCache\.loadingSequenceId/);
+  assert.match(source, /cachedFrameCount\(\) >= activeSequence\.value\.frame_count/);
+  assert.match(source, /async function prepareBrowserTrackingMotion\(\) \{[\s\S]*?if \(!frameCacheReadyForActiveSequence\(\)\) \{[\s\S]*?throw new Error\(t\('motion\.framesRequired'\)\)/);
+  assert.match(source, /async function runPolicyComparison\(\) \{[\s\S]*?if \(!frameCacheReadyForActiveSequence\(\)\) \{[\s\S]*?throw new Error\(t\('motion\.framesRequired'\)\)/);
+
+  const handleBody = source.match(/async function handleTreeNode\(node\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
+  assert.match(handleBody, /cancelFrameCacheRequest\(\)/);
 });
 
 test('browser tab uses the G1 console favicon', () => {
@@ -598,18 +639,62 @@ test('motion browser shortens long relative paths without losing tooltip detail'
   assert.match(source, /return parts\.slice\(0, -1\)\.join\('\/'\)/);
 });
 
-test('trim export UI lets users choose format, twist2 extension, and output directory', () => {
+test('trim export UI lets users choose format, twist2 extension, output directory, and output name', () => {
   assert.match(source, /id="exportFormatSelect"/);
   assert.match(source, /v-model="exportFormat"/);
+  assert.match(source, /<option value="motion_tracking_npz">motion_tracking_npz<\/option>/);
+  assert.match(source, /<option value="kimodo_csv">kimodo_csv<\/option>/);
   assert.match(source, /id="twist2ExtensionSelect"/);
   assert.match(source, /v-model="twist2Extension"/);
   assert.match(source, /id="exportOutputDirInput"/);
   assert.match(source, /v-model="exportOutputDir"/);
+  assert.match(source, /id="exportOutputNameInput"/);
+  assert.match(source, /v-model="exportOutputName"/);
 
   const exportBody = functionBody('exportTrim');
   assert.match(exportBody, /export_format:\s*exportFormat\.value/);
   assert.match(exportBody, /output_dir:\s*exportOutputDir\.value\.trim\(\) \|\| null/);
+  assert.match(exportBody, /output_name:\s*exportOutputName\.value\.trim\(\) \|\| null/);
   assert.match(exportBody, /twist2_extension:\s*exportFormat\.value === 'twist2' \? twist2Extension\.value : null/);
+});
+
+test('trim export success shows a dismissible toast with the output path', () => {
+  assert.match(source, /id="exportToast"/);
+  assert.match(source, /role="status"/);
+  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /exportToast\.visible/);
+  assert.match(source, /exportToast\.path/);
+  assert.match(source, /id="exportToastClose"/);
+  assert.match(source, /@click="dismissExportToast"/);
+  assert.match(source, /function showExportToast\(path\)/);
+  assert.match(source, /function dismissExportToast\(\)/);
+  assert.match(source, /window\.setTimeout\(dismissExportToast,\s*4000\)/);
+  assert.match(source, /window\.clearTimeout\(exportToastTimer\)/);
+  assert.match(source, /t\('trim\.exportSuccess'\)/);
+
+  const exportBody = functionBody('exportTrim');
+  assert.match(exportBody, /showExportToast\(payload\.output_path\)/);
+});
+
+test('trim frame inputs keep local edits until committed', () => {
+  assert.match(source, /@focus="beginTrimFrameEdit\('start'\)"/);
+  assert.match(source, /@keyup\.enter="commitTrimStart"/);
+  assert.match(source, /@blur="commitTrimStart"/);
+  assert.match(source, /@focus="beginTrimFrameEdit\('end'\)"/);
+  assert.match(source, /@keyup\.enter="commitTrimEnd"/);
+  assert.match(source, /@blur="commitTrimEnd"/);
+
+  const syncBody = source.match(/function syncInputsFromSession\(\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
+  assert.match(syncBody, /if \(!editingTrimStart\.value\) \{[\s\S]*?trimStartInput\.value = session\.value\.trim_start/);
+  assert.match(syncBody, /if \(!editingTrimEnd\.value\) \{[\s\S]*?trimEndInput\.value = session\.value\.trim_end/);
+
+  const startBody = functionBody('commitTrimStart');
+  assert.match(startBody, /editingTrimStart\.value = false/);
+  assert.match(startBody, /setTrimStart\(\)/);
+
+  const endBody = functionBody('commitTrimEnd');
+  assert.match(endBody, /editingTrimEnd\.value = false/);
+  assert.match(endBody, /setTrimEnd\(\)/);
 });
 
 test('timeline slider exposes live progress as a CSS variable for the custom track fill', () => {
@@ -629,6 +714,22 @@ test('motion workflow is promoted ahead of trim export in the left rail', () => 
   assert.ok(body.indexOf('motion-workflow-card') < body.indexOf('trim-export-card'), 'motion workflow should appear before trim/export');
   assert.match(source, /id="motionStartTransitionToggle" class="toggle-row motion-start-transition-toggle"/);
   assert.match(source, /class="target-smoothing-control target-smoothing-panel"/);
+});
+
+test('motion transition and smoothing controls use reference toggle color treatment', () => {
+  const transitionBlock = cssBlock('\\.motion-start-transition-toggle', '.motion-start-transition-toggle');
+  const transitionLabelBlock = cssBlock('\\.motion-start-transition-toggle \\.toggle-copy strong', '.motion-start-transition-toggle label');
+  const smoothingBlock = cssBlock('\\.target-smoothing-panel', '.target-smoothing-panel');
+  const smoothingLabelBlock = cssBlock('\\.target-smoothing-panel \\.toggle-copy strong,\\s*\\.target-smoothing-alpha \\.alpha-value', '.target-smoothing-panel label');
+
+  assert.match(transitionBlock, /border-color:\s*color-mix\(in srgb,\s*var\(--accent-2\)\s*36%,\s*var\(--line\)\s*64%\)/);
+  assert.match(transitionBlock, /background:\s*color-mix\(in srgb,\s*var\(--surface-2\)\s*88%,\s*var\(--accent-2\)\s*12%\)/);
+  assert.match(transitionLabelBlock, /color:\s*color-mix\(in srgb,\s*var\(--accent-2\)\s*78%,\s*var\(--ink\)\s*22%\)/);
+  assert.match(smoothingBlock, /border-color:\s*color-mix\(in srgb,\s*var\(--amber\)\s*40%,\s*var\(--line\)\s*60%\)/);
+  assert.match(smoothingBlock, /background:\s*color-mix\(in srgb,\s*var\(--surface-2\)\s*88%,\s*var\(--amber\)\s*12%\)/);
+  assert.match(smoothingLabelBlock, /color:\s*var\(--amber\)/);
+  assert.doesNotMatch(transitionBlock, /linear-gradient/);
+  assert.doesNotMatch(smoothingBlock, /linear-gradient/);
 });
 
 test('evaluation panel stacks reference toggles above A\\/B comparison and recording', () => {

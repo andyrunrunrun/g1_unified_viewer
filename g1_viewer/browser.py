@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .importers import SUPPORTED_TWIST2_EXTENSIONS
+import numpy as np
+
+from .importers import (
+    MOTION_TRACKING_NPZ_DATASET_METADATA_FILES,
+    MOTION_TRACKING_NPZ_REQUIRED_KEYS,
+    SUPPORTED_TWIST2_EXTENSIONS,
+    is_motion_tracking_npz_dataset_file,
+)
 from .models import BrowserNode
 
 
@@ -11,11 +18,33 @@ def _is_sonic_directory(path: Path) -> bool:
 
 
 def _fast_motion_format(path: Path) -> str | None:
+    if _is_motion_tracking_npz_sidecar(path):
+        return None
+    if is_motion_tracking_npz_dataset_file(path):
+        return "motion_tracking_npz"
+    if path.is_file() and path.suffix.lower() == ".npz" and _is_motion_tracking_npz(path):
+        return "motion_tracking_npz"
     if path.is_file() and path.suffix.lower() in SUPPORTED_TWIST2_EXTENSIONS:
         return "twist2"
     if path.is_file() and path.suffix.lower() == ".csv":
         return "kimodo_csv"
     return None
+
+
+def _is_motion_tracking_npz(path: Path) -> bool:
+    try:
+        with np.load(path, allow_pickle=True) as npz_file:
+            return MOTION_TRACKING_NPZ_REQUIRED_KEYS.issubset(npz_file.files)
+    except Exception:
+        return False
+
+
+def _is_motion_tracking_npz_sidecar(path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.name in MOTION_TRACKING_NPZ_DATASET_METADATA_FILES
+        and all((path.parent / file_name).is_file() for file_name in MOTION_TRACKING_NPZ_DATASET_METADATA_FILES)
+    )
 
 
 def _relative_label(root: Path, path: Path) -> str:

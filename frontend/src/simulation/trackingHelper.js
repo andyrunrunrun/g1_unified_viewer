@@ -144,11 +144,8 @@ export class TrackingHelper {
     if (!this.motions[name]) {
       return false;
     }
-    if (this.currentName === 'default' || name === 'default' || name === this.currentName) {
-      this._startMotionFromCurrent(name, state, options);
-      return true;
-    }
-    return false;
+    this._startMotionFromCurrent(name, state, options);
+    return true;
   }
 
   advance() {
