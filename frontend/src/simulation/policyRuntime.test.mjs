@@ -34,15 +34,132 @@ async function withMockedFetch(fetchImpl, callback) {
   }
 }
 
+async function createMinimalHoloMotionPolicy({
+  bodyNames = ['pelvis'],
+  keybodyNames = [],
+  obsTerms = ['actor_ref_dof_pos_cur'],
+  nFutFrames = 0
+} = {}) {
+  const policy = await createHoloMotionBrowserPolicy(
+    { policy_id: 'holomotion_motion_tracking' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a'],
+        default_joint_pos: [0],
+        reset_joint_pos: [0],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [1],
+        stiffness: [10],
+        damping: [1],
+        torque_limits: [30],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          n_fut_frames: nFutFrames,
+          keybody_names: keybodyNames,
+          body_names: bodyNames,
+          obs_terms: obsTerms
+        },
+        onnx: { path: './model.onnx', meta: { in_keys: ['obs'], out_keys: ['actions'] } }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion/model.onnx',
+      ort: {
+        Tensor: class Tensor {
+          constructor(type, data, dims) { this.type = type; this.data = data; this.dims = dims; }
+        },
+        InferenceSession: {
+          async create() {
+            return {
+              inputNames: ['obs'],
+              outputNames: ['actions'],
+              async run() { return { actions: { data: new Float32Array([0]) } }; }
+            };
+          }
+        }
+      },
+      clonePhysicsOptions(options) { return options ? JSON.parse(JSON.stringify(options)) : null; }
+    }
+  );
+  await withMockedFetch(
+    async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }),
+    async () => policy.load()
+  );
+  return policy;
+}
+
 test('frontend declares onnxruntime-web for browser ONNX policy inference', () => {
   assert.equal(typeof packageJson.dependencies['onnxruntime-web'], 'string');
 });
 
-test('browser ONNX policy pins ONNX Runtime Web wasm assets to Vite-served node_modules', () => {
+test('browser policy config inheritance deep-merges compact model overrides', async () => {
+  const requests = [];
+  const configs = new Map([
+    ['/policy-plugins/variant/config.json', {
+      extends: '/policy-plugins/motion_tracking/tracking_policy_latest.json',
+      onnx: { path: './variant.onnx' }
+    }],
+    ['/policy-plugins/motion_tracking/tracking_policy_latest.json', {
+      policy_joint_names: ['joint_a'],
+      onnx: {
+        path: './base.onnx',
+        meta: { in_shapes: [[[1, 1590]]], out_keys: ['actions'] }
+      },
+      physics_options: { timestep: 0.002 }
+    }]
+  ]);
+
+  const originalImport = globalThis.__g1ImportBrowserPolicyModule;
+  globalThis.__g1ImportBrowserPolicyModule = async () => ({
+    async createBrowserPolicy(manifest, host) {
+      return {
+        async load() {
+          this.config = await host.loadPolicyConfig(manifest.config_path);
+          return this;
+        },
+        defaultStance() { return null; }
+      };
+    }
+  });
+
+  let config;
+  try {
+    const runtime = new BrowserPolicyRuntime();
+    await withMockedFetch(async (url) => {
+      requests.push(url);
+      return { ok: true, json: async () => configs.get(url) };
+    }, async () => runtime.activate({
+      policy_id: 'variant',
+      runtime: 'browser',
+      framework: 'custom_js',
+      module_path: '/policy-plugins/variant/Policy.js',
+      config_path: '/policy-plugins/variant/config.json'
+    }));
+    config = runtime.activePolicy.config;
+  } finally {
+    if (originalImport === undefined) {
+      delete globalThis.__g1ImportBrowserPolicyModule;
+    } else {
+      globalThis.__g1ImportBrowserPolicyModule = originalImport;
+    }
+  }
+
+  assert.deepEqual(requests, [
+    '/policy-plugins/variant/config.json',
+    '/policy-plugins/motion_tracking/tracking_policy_latest.json'
+  ]);
+  assert.deepEqual(config.policy_joint_names, ['joint_a']);
+  assert.equal(config.onnx.path, './variant.onnx');
+  assert.deepEqual(config.onnx.meta, { in_shapes: [[[1, 1590]]], out_keys: ['actions'] });
+  assert.deepEqual(config.physics_options, { timestep: 0.002 });
+  assert.equal('extends' in config, false);
+});
+
+test('browser ONNX policy lazy-loads Vite-bundled runtime assets', () => {
   const source = readFileSync(new URL('./policyRuntime.js', import.meta.url), 'utf-8');
 
-  assert.match(source, /const ORT_WASM_ASSET_PATH = ['"`]\/node_modules\/onnxruntime-web\/dist\/['"`]/);
-  assert.match(source, /ort\.env\.wasm\.wasmPaths\s*=\s*ORT_WASM_ASSET_PATH/);
+  assert.match(source, /import\(['"`]onnxruntime-web['"`]\)/);
+  assert.doesNotMatch(source, /\/node_modules\/onnxruntime-web\/dist/);
+  assert.doesNotMatch(source, /^import \* as ort from ['"`]onnxruntime-web['"`]/m);
 });
 
 test('fallback browser policy manifests expose mock passthrough and motion tracking policies', () => {
@@ -150,8 +267,6 @@ test('SONIC browser plugin is registered as a custom JS policy with local model 
   assert.equal(config.default_joint_pos.length, 29);
   assert.equal(config.stiffness.length, 29);
   assert.equal(config.damping.length, 29);
-  assert.equal(existsSync(new URL('model_encoder.onnx', pluginDir)), true);
-  assert.equal(existsSync(new URL('model_decoder.onnx', pluginDir)), true);
   assert.match(moduleSource, /export async function createBrowserPolicy/);
   assert.match(moduleSource, /class SonicBrowserPolicy/);
 });
@@ -189,7 +304,6 @@ test('HoloMotion browser plugin is registered as a custom JS policy with local m
     config.holomotion.obs_terms.includes('actor_ref_keybody_rel_pos_cur'),
     false
   );
-  assert.equal(existsSync(new URL('model.onnx', pluginDir)), true);
   assert.match(moduleSource, /export async function createBrowserPolicy/);
   assert.match(moduleSource, /class HoloMotionBrowserPolicy/);
 });
@@ -339,12 +453,13 @@ test('HoloMotion v1.3 step keeps transformer KV cache on the backend', async () 
     assert.equal(typeof capturedRequests[0].cache_id, 'string');
     assert.ok(capturedRequests[0].cache_id.length > 0);
     assert.equal(capturedRequests[0].reset_cache, true);
-    assert.equal(capturedRequests[0].past_key_values, null);
-    assert.deepEqual(capturedRequests[0].past_key_values_shape, [1, 2, 1, 4]);
+    assert.equal('past_key_values' in capturedRequests[0], false);
+    assert.equal('past_key_values_shape' in capturedRequests[0], false);
     assert.equal(capturedRequests[0].step_idx, 0);
     assert.equal(capturedRequests[1].cache_id, capturedRequests[0].cache_id);
     assert.equal(capturedRequests[1].reset_cache, false);
-    assert.equal(capturedRequests[1].past_key_values, null);
+    assert.equal('past_key_values' in capturedRequests[1], false);
+    assert.equal('past_key_values_shape' in capturedRequests[1], false);
     assert.equal(capturedRequests[1].step_idx, 1);
   });
 });
@@ -444,6 +559,8 @@ test('Humanoid-GPT step calls backend inference with current and reference frame
     assert.equal(capturedRequests[1].reset_cache, false);
     assert.equal(capturedRequests[1].cache_id, capturedRequests[0].cache_id);
     assert.deepEqual(capturedRequests[0].current_state.state.joint_positions, [0.6, -0.7]);
+    assert.deepEqual(capturedRequests[0].current_state.joint_names, ['joint_a', 'joint_b']);
+    assert.deepEqual(capturedRequests[0].ref_curr.joint_names, ['joint_a', 'joint_b']);
     assert.deepEqual(capturedRequests[0].ref_curr.state.joint_positions, [0.1, -0.1]);
     assert.deepEqual(capturedRequests[0].ref_next.state.root_translation, [0.1, 0, 0.78]);
 
@@ -522,8 +639,8 @@ test('HoloMotion v1.3 step runs single-input models without KV feeds', async () 
     });
 
     assert.deepEqual(capturedRequest.obs.map((value) => Number(value.toFixed(6))), [0.25]);
-    assert.equal(capturedRequest.past_key_values, null);
-    assert.equal(capturedRequest.past_key_values_shape, null);
+    assert.equal('past_key_values' in capturedRequest, false);
+    assert.equal('past_key_values_shape' in capturedRequest, false);
     assert.equal(capturedRequest.step_idx, 0);
     assert.deepEqual(output.joint_positions, [0.5]);
   });
@@ -791,6 +908,144 @@ test('HoloMotion motion clips remap frame cache joints into policy order', async
 
     assert.deepEqual(Array.from(obs), [2, 1, 4, 3]);
   });
+});
+
+test('HoloMotion motion clips remap body tracks into configured body order', async () => {
+  const policy = await createMinimalHoloMotionPolicy({
+    bodyNames: ['hand', 'pelvis'],
+    keybodyNames: ['hand'],
+    obsTerms: ['actor_ref_keybody_rel_pos_cur']
+  });
+  policy.setMotionClip('active_clip', {
+    joint_names: ['joint_a'],
+    body_names: ['pelvis', 'hand'],
+    frames: [{
+      joint_positions: [0],
+      joint_velocities: [0],
+      root_translation: [0, 0, 0.78],
+      root_rotation_wxyz: [1, 0, 0, 0],
+      body_positions: [[0, 0, 0.78], [10, 0, 0.78]],
+      body_rotations_wxyz: [[1, 0, 0, 0], [1, 0, 0, 0]]
+    }]
+  });
+  policy.requestMotion('active_clip', null, { transitionSteps: 0 });
+
+  const obs = policy._buildObservation({
+    jointPos: Float32Array.from([0]),
+    jointVel: Float32Array.from([0]),
+    rootQuat: Float32Array.from([1, 0, 0, 0]),
+    rootAngVel: Float32Array.from([0, 0, 0])
+  });
+
+  assert.deepEqual(Array.from(obs), [10, 0, 0]);
+});
+
+test('HoloMotion transition interpolates joints without consuming source frames', async () => {
+  const policy = await createMinimalHoloMotionPolicy();
+  policy.setMotionClip('active_clip', {
+    joint_names: ['joint_a'],
+    body_names: ['pelvis'],
+    frames: [1, 2].map((joint) => ({
+      joint_positions: [joint],
+      joint_velocities: [0],
+      root_translation: [0, 0, 0.78],
+      root_rotation_wxyz: [1, 0, 0, 0],
+      body_positions: [[0, 0, 0.78]],
+      body_rotations_wxyz: [[1, 0, 0, 0]]
+    }))
+  });
+  policy.requestMotion(
+    'active_clip',
+    {
+      joint_names: ['joint_a'],
+      state: {
+        joint_positions: [0],
+        joint_velocities: [0],
+        root_translation: [0, 0, 0.78],
+        root_rotation_wxyz: [1, 0, 0, 0]
+      }
+    },
+    { startFrame: 0, transitionSteps: 2 }
+  );
+
+  assert.equal(policy.tracking.playbackState().inTransition, true);
+  assert.equal(policy.tracking.playbackState().transitionLen, 2);
+  assert.equal(Number(policy.tracking.frame().jointPos[0].toFixed(6)), 0.5);
+  policy.tracking.advance();
+  assert.equal(Number(policy.tracking.frame().jointPos[0].toFixed(6)), 1);
+  policy.tracking.advance();
+  assert.equal(policy.tracking.playbackState().inTransition, false);
+  assert.equal(policy.tracking.playbackState().sourceFrame, 0);
+  assert.equal(policy.tracking.frame().jointPos[0], 1);
+  policy.tracking.advance();
+  assert.equal(policy.tracking.playbackState().sourceFrame, 1);
+});
+
+test('HoloMotion anchoring applies a lazy transform without rewriting the source clip', async () => {
+  const policy = await createMinimalHoloMotionPolicy();
+  policy.setMotionClip('active_clip', {
+    joint_names: ['joint_a'],
+    body_names: ['pelvis'],
+    frames: [0, 1].map((x) => ({
+      joint_positions: [x],
+      joint_velocities: [0],
+      root_translation: [x, 0, 0.78],
+      root_rotation_wxyz: [1, 0, 0, 0],
+      root_linear_velocity: [1, 0, 0],
+      root_angular_velocity: [0, 0, 0],
+      body_positions: [[x, 0, 0.78]],
+      body_rotations_wxyz: [[1, 0, 0, 0]],
+      body_linear_velocities: [[1, 0, 0]],
+      body_angular_velocities: [[0, 0, 0]]
+    }))
+  });
+  policy.requestMotion('active_clip', null, { transitionSteps: 0 });
+  const sourceClip = policy.tracking._clip();
+  const sourceRootRows = sourceClip.rootPos;
+
+  policy.tracking.anchorCurrentFrameToState({
+    jointPos: Float32Array.from([0]),
+    rootPos: Float32Array.from([10, 0, 0.78]),
+    rootQuat: Float32Array.from([1, 0, 0, 0])
+  });
+
+  assert.equal(policy.tracking._clip().rootPos, sourceRootRows);
+  assert.deepEqual(Array.from(sourceClip.rootPos[0]).map(roundZeros), [0, 0, 0.78]);
+  assert.deepEqual(Array.from(policy.tracking.frame().rootPos).map(roundZeros), [10, 0, 0.78]);
+  assert.deepEqual(Array.from(policy.tracking.frame(1).rootPos).map(roundZeros), [11, 0, 0.78]);
+});
+
+test('HoloMotion observation computes aligned current and future frames once per step', async () => {
+  const policy = await createMinimalHoloMotionPolicy({
+    nFutFrames: 1,
+    obsTerms: [
+      'actor_ref_dof_pos_cur',
+      'actor_ref_root_height_cur',
+      'actor_ref_dof_pos_fut'
+    ]
+  });
+  let frameCalls = 0;
+  let futureCalls = 0;
+  const originalFrame = policy.tracking.frame.bind(policy.tracking);
+  const originalFutureFrames = policy.tracking.futureFrames.bind(policy.tracking);
+  policy.tracking.frame = (...args) => {
+    frameCalls += 1;
+    return originalFrame(...args);
+  };
+  policy.tracking.futureFrames = (...args) => {
+    futureCalls += 1;
+    return originalFutureFrames(...args);
+  };
+
+  policy._buildObservation({
+    jointPos: Float32Array.from([0]),
+    jointVel: Float32Array.from([0]),
+    rootQuat: Float32Array.from([1, 0, 0, 0]),
+    rootAngVel: Float32Array.from([0, 0, 0])
+  });
+
+  assert.equal(frameCalls, 1);
+  assert.equal(futureCalls, 1);
 });
 
 test('HoloMotion tracking honors requested start frame and yaw-aligns reference velocities', async () => {
@@ -1533,7 +1788,7 @@ test('bundled ONNX policy config keeps model assets relative to the policy plugi
   assert.doesNotMatch(config.onnx.path, /examples\/checkpoints/);
 });
 
-test('bundled twist2 policy model lives inside its format folder', () => {
+test('twist2 format discovers local models without bundling model parameters', () => {
   const config = JSON.parse(readFileSync(new URL('../../../policy_plugins/twist2/tracking_policy_latest.json', import.meta.url), 'utf-8'));
   const manifest = JSON.parse(readFileSync(new URL('../../../policy_plugins/twist2/policy_format.json', import.meta.url), 'utf-8'));
   const pluginDir = new URL('../../../policy_plugins/twist2/', import.meta.url);
@@ -1544,7 +1799,6 @@ test('bundled twist2 policy model lives inside its format folder', () => {
   assert.equal(manifest.format_id, 'twist2');
   assert.equal(manifest.policy_id_prefix, 'twist2');
   assert.equal(config.onnx.path, undefined);
-  assert.ok(models.length >= 2);
   for (const modelName of models) {
     const model = readFileSync(new URL(modelName, pluginDir));
     assert.ok(model.byteLength > 1024);

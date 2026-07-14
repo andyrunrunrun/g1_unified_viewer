@@ -9,7 +9,7 @@
   "runtime": "browser",
   "framework": "onnx",
   "control_mode": "joint_position_target",
-  "config_template": "tracking_policy_latest.json",
+  "config_template": "../motion_tracking/tracking_policy_latest.json",
   "policy_id_prefix": "motion_tracking_sim2real_0315",
   "tags": [
     "onnx",

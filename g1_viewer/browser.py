@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +47,7 @@ def _file_motion_format(path: Path) -> str | None:
             return "holomotion_npz"
         if is_motion_tracking_npz_dataset_file(path) or _is_motion_tracking_npz(path):
             return "motion_tracking_npz"
+        return None
     if suffix in SUPPORTED_TWIST2_EXTENSIONS:
         return "twist2"
     return None
@@ -111,7 +113,7 @@ def _motion_node(root: Path, path: Path, motion_format: str) -> BrowserNode:
 def _has_visible_child(path: Path) -> bool:
     try:
         for child in path.iterdir():
-            if child.is_dir() or _file_can_be_browser_motion(child):
+            if child.is_dir() or _fast_motion_format(child) is not None:
                 return True
     except OSError:
         return False
@@ -131,38 +133,41 @@ def _child_directory_node(root: Path, path: Path) -> BrowserNode:
     )
 
 
-def _directory_children(root: Path, path: Path, *, limit: int, offset: int) -> tuple[list[BrowserNode], int, bool]:
-    children: list[BrowserNode] = []
-    total_count = 0
-    end_index = offset + limit
-    entries = []
-    with os.scandir(path) as scan:
+@lru_cache(maxsize=128)
+def _directory_index(path_str: str, directory_mtime_ns: int) -> tuple[tuple[bool, str, str | None], ...]:
+    del directory_mtime_ns
+    entries: list[tuple[bool, str, str, str | None]] = []
+    with os.scandir(path_str) as scan:
         for entry in scan:
             try:
                 is_directory = entry.is_dir()
             except OSError:
                 continue
-            entries.append((not is_directory, entry.name.lower(), entry.path, is_directory))
+            motion_format = None if is_directory else _file_motion_format(Path(entry.path))
+            if is_directory or motion_format is not None:
+                entries.append((not is_directory, entry.name.lower(), entry.path, motion_format))
+    entries.sort()
+    return tuple((not file_first, child_path, motion_format) for file_first, _, child_path, motion_format in entries)
 
-    for _, _, child_path, is_directory in sorted(entries):
+
+def _directory_children(root: Path, path: Path, *, limit: int, offset: int) -> tuple[list[BrowserNode], int, bool]:
+    try:
+        directory_mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        directory_mtime_ns = 0
+    entries = _directory_index(str(path), directory_mtime_ns)
+    total_count = len(entries)
+    end_index = offset + limit
+    children: list[BrowserNode] = []
+    for is_directory, child_path, motion_format in entries[offset:end_index]:
         child = Path(child_path)
-        if not is_directory and not _file_can_be_browser_motion(child):
-            continue
-
-        include_in_page = offset <= total_count < end_index
         if is_directory:
-            if include_in_page:
-                if _is_sonic_directory(child):
-                    children.append(_motion_node(root, child, "sonic"))
-                else:
-                    children.append(_child_directory_node(root, child))
-            total_count += 1
-            continue
-
-        if include_in_page and (motion_format := _file_motion_format(child)) is not None:
+            if _is_sonic_directory(child):
+                children.append(_motion_node(root, child, "sonic"))
+            else:
+                children.append(_child_directory_node(root, child))
+        elif motion_format is not None:
             children.append(_motion_node(root, child, motion_format))
-        total_count += 1
-
     return children, total_count, end_index < total_count
 
 

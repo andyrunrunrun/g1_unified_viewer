@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 SourceType = Literal["dataset", "policy"]
@@ -145,14 +145,13 @@ class SessionPlaybackRequest(BaseModel):
     frame_index: int | None = None
     enabled: bool | None = None
 
-    @root_validator(skip_on_failure=True)
-    def validate_action_payload(cls, values: dict[str, Any]) -> dict[str, Any]:
-        action = values.get("action")
-        if action == "seek" and values.get("frame_index") is None:
+    @model_validator(mode="after")
+    def validate_action_payload(self) -> SessionPlaybackRequest:
+        if self.action == "seek" and self.frame_index is None:
             raise ValueError("frame_index is required for seek")
-        if action == "loop" and values.get("enabled") is None:
+        if self.action == "loop" and self.enabled is None:
             raise ValueError("enabled is required for loop")
-        return values
+        return self
 
 
 class LoopRequest(BaseModel):
@@ -167,12 +166,11 @@ class SessionTrimRequest(BaseModel):
     action: Literal["set_start", "set_end", "mark_start", "mark_end"]
     frame_index: int | None = None
 
-    @root_validator(skip_on_failure=True)
-    def validate_action_payload(cls, values: dict[str, Any]) -> dict[str, Any]:
-        action = values.get("action")
-        if action in {"set_start", "set_end"} and values.get("frame_index") is None:
-            raise ValueError(f"frame_index is required for {action}")
-        return values
+    @model_validator(mode="after")
+    def validate_action_payload(self) -> SessionTrimRequest:
+        if self.action in {"set_start", "set_end"} and self.frame_index is None:
+            raise ValueError(f"frame_index is required for {self.action}")
+        return self
 
 
 class SessionPhysicsRequest(BaseModel):
@@ -274,6 +272,43 @@ class PolicyStepRequest(BaseModel):
 class MockStepRequest(BaseModel):
     policy_id: str
     snapshot: SimulationSnapshot | None = None
+
+
+class InferenceRobotState(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    joint_positions: list[float] = Field(default_factory=list, max_length=64)
+    joint_velocities: list[float] = Field(default_factory=list, max_length=64)
+    root_translation: list[float] | None = Field(default=None, min_length=3, max_length=3)
+    root_rotation_wxyz: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    root_linear_velocity: list[float] | None = Field(default=None, min_length=3, max_length=3)
+    root_angular_velocity: list[float] | None = Field(default=None, min_length=3, max_length=3)
+
+
+class HumanoidInferenceState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    joint_names: list[str] = Field(default_factory=list, max_length=64)
+    state: InferenceRobotState
+
+
+class HumanoidGPTInferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_state: HumanoidInferenceState
+    ref_curr: HumanoidInferenceState
+    ref_next: HumanoidInferenceState
+    cache_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    reset_cache: bool = False
+
+
+class HoloMotionV13InferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    obs: list[float] = Field(min_length=1, max_length=4096)
+    cache_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    reset_cache: bool = False
+    step_idx: int = Field(default=0, ge=0, le=10_000_000)
 
 
 class ViewerInteractionSummary(BaseModel):

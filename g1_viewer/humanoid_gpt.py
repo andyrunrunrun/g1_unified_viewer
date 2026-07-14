@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextlib import nullcontext
 import math
 import os
 from pathlib import Path
@@ -325,6 +326,8 @@ class HumanoidGPTBackend:
         self._input_names: list[str] = []
         self._output_names: list[str] = []
         self._states: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._state_lock = threading.Lock()
+        self._cache_stripes = tuple(threading.Lock() for _ in range(16))
 
     def _make_session_options(self) -> Any:
         import onnxruntime as ort
@@ -370,22 +373,29 @@ class HumanoidGPTBackend:
             return session
 
     def _last_action(self, cache_id: str | None, reset_cache: bool) -> np.ndarray:
-        if not cache_id or reset_cache or cache_id not in self._states:
-            return np.zeros(ACTION_DIM, dtype=np.float32)
-        self._states.move_to_end(cache_id)
-        return self._states[cache_id].copy()
+        with self._state_lock:
+            if not cache_id or reset_cache or cache_id not in self._states:
+                return np.zeros(ACTION_DIM, dtype=np.float32)
+            self._states.move_to_end(cache_id)
+            return self._states[cache_id].copy()
 
     def _store_action(self, cache_id: str | None, action: np.ndarray) -> None:
-        if not cache_id:
-            return
-        self._states[cache_id] = action.astype(np.float32).copy()
-        self._states.move_to_end(cache_id)
-        while len(self._states) > self.max_cached_states:
-            self._states.popitem(last=False)
+        with self._state_lock:
+            if not cache_id:
+                return
+            self._states[cache_id] = action.astype(np.float32).copy()
+            self._states.move_to_end(cache_id)
+            while len(self._states) > self.max_cached_states:
+                self._states.popitem(last=False)
 
     def infer(self, payload: dict[str, Any]) -> dict[str, Any]:
-        session = self._ensure_session()
         cache_id = str(payload.get("cache_id") or "") or None
+        guard = self._cache_stripes[hash(cache_id) % len(self._cache_stripes)] if cache_id else nullcontext()
+        with guard:
+            return self._infer(payload, cache_id)
+
+    def _infer(self, payload: dict[str, Any], cache_id: str | None) -> dict[str, Any]:
+        session = self._ensure_session()
         reset_cache = bool(payload.get("reset_cache"))
         current = _state_from_payload(payload.get("current_state"))
         ref_curr = _state_from_payload(payload.get("ref_curr") or payload.get("reference"))

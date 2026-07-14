@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
+import time
 import unittest
 
 import numpy as np
@@ -111,6 +114,50 @@ class HumanoidGPTBackendTest(unittest.TestCase):
             backend.infer({**payload, "cache_id": cache_id})
 
         self.assertEqual(list(backend._states.keys()), ["b", "c"])
+
+    def test_same_cache_id_serializes_inference(self) -> None:
+        from g1_viewer.humanoid_gpt import (
+            HUMANOID_GPT_DEFAULT_JOINT_POS,
+            HUMANOID_GPT_JOINT_NAMES,
+            HumanoidGPTBackend,
+        )
+
+        class ConcurrentSession(_FakeSession):
+            def __init__(self) -> None:
+                super().__init__()
+                self.counter_lock = threading.Lock()
+                self.active = 0
+                self.max_active = 0
+
+            def run(self, output_names: list[str], feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
+                with self.counter_lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                time.sleep(0.03)
+                with self.counter_lock:
+                    self.active -= 1
+                return [np.full((1, 29), 0.5, dtype=np.float32)]
+
+        session = ConcurrentSession()
+        default_joint_pos = np.asarray(HUMANOID_GPT_DEFAULT_JOINT_POS, dtype=np.float32)
+        state = _state_payload(HUMANOID_GPT_JOINT_NAMES, default_joint_pos, joint_offset=0.0, root_x=0.0)
+        payload = {
+            "cache_id": "shared",
+            "current_state": state,
+            "ref_curr": state,
+            "ref_next": state,
+        }
+        backend = HumanoidGPTBackend(
+            model_path=Path("unused.onnx"),
+            session_factory=lambda _path: session,
+        )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(backend.infer, payload) for _ in range(2)]
+            for future in futures:
+                future.result()
+
+        self.assertEqual(session.max_active, 1)
 
 
 if __name__ == "__main__":

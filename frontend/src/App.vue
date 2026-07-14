@@ -573,7 +573,6 @@ import {
   Video
 } from 'lucide-vue-next';
 import { fetchJson, formatJson, postJson } from './api.js';
-import { BrowserMujocoViewer } from './simulation/browserMujocoViewer.js';
 import {
   DEFAULT_BROWSER_POLICY_MANIFESTS,
   browserRunnablePolicies,
@@ -3151,6 +3150,7 @@ async function initViewer() {
     return;
   }
   try {
+    const { BrowserMujocoViewer } = await import('./simulation/browserMujocoViewer.js');
     const manifest = await fetchJson('/api/assets/browser-scene');
     viewer = new BrowserMujocoViewer(viewerContainer.value, (message) => {
       viewerStatus.value = message;

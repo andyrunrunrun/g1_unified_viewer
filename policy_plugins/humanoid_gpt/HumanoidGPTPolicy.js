@@ -1,8 +1,12 @@
 import { HoloMotionBrowserPolicy } from '../holomotion/HoloMotionPolicy.js?g1_humanoid_gpt_base=v1';
 
-function arrayFrom(values, fallback = []) {
+function numericArray(values, fallback = []) {
   const raw = values ? Array.from(values) : Array.from(fallback);
   return raw.map((value) => Number(Number(value ?? 0).toFixed(6)));
+}
+
+function stringArray(values) {
+  return Array.from(values ?? [], (value) => String(value));
 }
 
 function stateField(payload = {}) {
@@ -46,38 +50,34 @@ export class HumanoidGPTBrowserPolicy extends HoloMotionBrowserPolicy {
 
   _statePayload(state) {
     return {
-      joint_names: arrayFrom(this.policyJointNames),
+      joint_names: stringArray(this.policyJointNames),
       state: {
-        joint_positions: arrayFrom(state?.jointPos, this.defaultJointPos),
-        joint_velocities: arrayFrom(state?.jointVel, new Float32Array(this.numActions)),
-        root_translation: arrayFrom(state?.rootPos, this.resetRootTranslation),
-        root_rotation_wxyz: arrayFrom(state?.rootQuat, [1, 0, 0, 0]),
-        root_linear_velocity: arrayFrom(state?.rootLinVel, [0, 0, 0]),
-        root_angular_velocity: arrayFrom(state?.rootAngVel, [0, 0, 0])
+        joint_positions: numericArray(state?.jointPos, this.defaultJointPos),
+        joint_velocities: numericArray(state?.jointVel, new Float32Array(this.numActions)),
+        root_translation: numericArray(state?.rootPos, this.resetRootTranslation),
+        root_rotation_wxyz: numericArray(state?.rootQuat, [1, 0, 0, 0]),
+        root_linear_velocity: numericArray(state?.rootLinVel, [0, 0, 0]),
+        root_angular_velocity: numericArray(state?.rootAngVel, [0, 0, 0])
       }
     };
   }
 
   _framePayload(frame) {
     return {
-      joint_names: arrayFrom(this.policyJointNames),
+      joint_names: stringArray(this.policyJointNames),
       state: {
-        joint_positions: arrayFrom(frame?.jointPos, this.defaultJointPos),
-        joint_velocities: arrayFrom(frame?.jointVel, new Float32Array(this.numActions)),
-        root_translation: arrayFrom(frame?.rootPos, this.resetRootTranslation),
-        root_rotation_wxyz: arrayFrom(frame?.rootQuat, [1, 0, 0, 0]),
-        root_linear_velocity: arrayFrom(frame?.rootLinVel, [0, 0, 0]),
-        root_angular_velocity: arrayFrom(frame?.rootAngVel, [0, 0, 0])
+        joint_positions: numericArray(frame?.jointPos, this.defaultJointPos),
+        joint_velocities: numericArray(frame?.jointVel, new Float32Array(this.numActions)),
+        root_translation: numericArray(frame?.rootPos, this.resetRootTranslation),
+        root_rotation_wxyz: numericArray(frame?.rootQuat, [1, 0, 0, 0]),
+        root_linear_velocity: numericArray(frame?.rootLinVel, [0, 0, 0]),
+        root_angular_velocity: numericArray(frame?.rootAngVel, [0, 0, 0])
       }
     };
   }
 
   _nextFrame() {
-    const nextIndex = Math.min(
-      Number(this.tracking.refIdx ?? 0) + 1,
-      Math.max(Number(this.tracking.refLen ?? 1) - 1, 0)
-    );
-    return this.tracking.frame(nextIndex);
+    return this.tracking.futureFrames(1)[0] ?? this.tracking.frame();
   }
 
   async _runBackendInference(payload) {

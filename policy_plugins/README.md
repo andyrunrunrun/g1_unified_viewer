@@ -8,6 +8,17 @@
 - 自定义 JS 策略：`framework: "custom_js"`，适合多模型、多输入输出拼接逻辑。
 - Mock 策略：`framework: "mock"`，用于关闭 Physics 时直接播放目标动作。
 
+## 本地模型文件
+
+模型参数不进入 Git。仓库根目录的 `.gitignore` 会忽略 `*.onnx` 和 `*.pt`，因此新环境需要单独安装模型：
+
+- HoloMotion v1.3：运行 `uv run python scripts/download_holomotion_v13.py`。
+- Humanoid-GPT：运行 `uv run python scripts/download_humanoid_gpt.py`。
+- motion tracking、Twist2、SONIC：把对应 ONNX 文件放入各自的 `policy_plugins/<format>/` 目录。
+- `frontend/public/examples/checkpoints/g1/policy_latest.onnx` 仅作为本地示例模型路径，同样不会提交。
+
+`policy_format.json` 类型的插件只会发现当前目录中实际存在的 `.onnx` 文件。模型缺失时，该策略不会出现在选择列表中，这是预期行为。
+
 ## 目录规则
 
 一个子目录代表一个策略插件或一种策略格式：

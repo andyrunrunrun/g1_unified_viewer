@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +21,6 @@ MODEL_FOLDER = "HoloMotion_motion_tracking_model"
 PLUGIN_DIR = Path(__file__).resolve().parent.parent / "policy_plugins" / "holomotion_v13"
 CONFIG_PATH = PLUGIN_DIR / "holomotion_v13_policy_config.json"
 MODEL_PATH = PLUGIN_DIR / "model.onnx"
-SOURCE_CONFIG_PATH = PLUGIN_DIR / "source_config.yaml"
 
 G1_BODY_NAMES = [
     "pelvis",
@@ -293,14 +294,27 @@ def install_assets(snapshot_root: Path) -> Path:
     onnx_path = _find_downloaded_file(model_root, "exported/*.onnx")
     source_config = model_root / "config.yaml"
 
-    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(onnx_path, MODEL_PATH)
-    if source_config.exists():
-      shutil.copy2(source_config, SOURCE_CONFIG_PATH)
+    model_meta = _read_onnx_session_metadata(onnx_path)
+    config = _build_config(model_meta, _load_yaml(source_config) if source_config.exists() else {})
+    config_text = json.dumps(config, indent=2, allow_nan=False) + "\n"
 
-    model_meta = _read_onnx_session_metadata(MODEL_PATH)
-    config = _build_config(model_meta, _load_yaml(SOURCE_CONFIG_PATH))
-    CONFIG_PATH.write_text(json.dumps(config, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+    model_fd, model_temp_name = tempfile.mkstemp(prefix=".model-", suffix=".onnx", dir=PLUGIN_DIR)
+    config_fd, config_temp_name = tempfile.mkstemp(prefix=".config-", suffix=".json", dir=PLUGIN_DIR)
+    os.close(model_fd)
+    os.close(config_fd)
+    model_temp = Path(model_temp_name)
+    config_temp = Path(config_temp_name)
+    try:
+        shutil.copy2(onnx_path, model_temp)
+        config_temp.write_text(config_text, encoding="utf-8")
+        os.replace(model_temp, MODEL_PATH)
+        os.replace(config_temp, CONFIG_PATH)
+    finally:
+        model_temp.unlink(missing_ok=True)
+        config_temp.unlink(missing_ok=True)
+
+    (PLUGIN_DIR / "source_config.yaml").unlink(missing_ok=True)
     return MODEL_PATH
 
 

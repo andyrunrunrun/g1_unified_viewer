@@ -1,69 +1,11 @@
-function cloneArray(values, fallback = []) {
-  if (!values) {
-    return Array.from(fallback);
-  }
-  return Array.from(values);
-}
-
-function toFloatArray(value, length, fallback = 0) {
-  const out = new Float32Array(length);
-  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-    for (let index = 0; index < length; index += 1) {
-      const next = Number(value[index]);
-      out[index] = Number.isFinite(next) ? next : fallback;
-    }
-    return out;
-  }
-  out.fill(Number.isFinite(Number(value)) ? Number(value) : fallback);
-  return out;
-}
-
-function normalizeQuat(quat) {
-  const w = Number(quat?.[0] ?? 1);
-  const x = Number(quat?.[1] ?? 0);
-  const y = Number(quat?.[2] ?? 0);
-  const z = Number(quat?.[3] ?? 0);
-  const norm = Math.hypot(w, x, y, z);
-  if (!Number.isFinite(norm) || norm < 1e-9) {
-    return [1, 0, 0, 0];
-  }
-  const inv = 1 / norm;
-  return [w * inv, x * inv, y * inv, z * inv];
-}
-
-function quatInverse(quat) {
-  const [w, x, y, z] = normalizeQuat(quat);
-  return [w, -x, -y, -z];
-}
-
-function quatMultiply(a, b) {
-  const [aw, ax, ay, az] = normalizeQuat(a);
-  const [bw, bx, by, bz] = normalizeQuat(b);
-  return normalizeQuat([
-    aw * bw - ax * bx - ay * by - az * bz,
-    aw * bx + ax * bw + ay * bz - az * by,
-    aw * by - ax * bz + ay * bw + az * bx,
-    aw * bz + ax * by - ay * bx + az * bw
-  ]);
-}
-
-function quatApplyInv(quat, vec) {
-  const [w, x, y, z] = normalizeQuat(quat);
-  const vx = Number(vec?.[0] ?? 0);
-  const vy = Number(vec?.[1] ?? 0);
-  const vz = Number(vec?.[2] ?? 0);
-  const tx = 2 * (y * vz - z * vy);
-  const ty = 2 * (z * vx - x * vz);
-  const tz = 2 * (x * vy - y * vx);
-  const cx = y * tz - z * ty;
-  const cy = z * tx - x * tz;
-  const cz = x * ty - y * tx;
-  return [
-    vx - w * tx + cx,
-    vy - w * ty + cy,
-    vz - w * tz + cz
-  ];
-}
+import {
+  cloneArray,
+  normalizeQuat,
+  quatApplyInv,
+  quatInverse,
+  quatMultiply,
+  toFloatArray
+} from '../shared/policyMath.js';
 
 function projectedGravity(quat) {
   return quatApplyInv(quat, [0, 0, -1]);
@@ -74,10 +16,6 @@ function clampIndex(index, length) {
     return 0;
   }
   return Math.min(Math.max(Math.floor(Number(index) || 0), 0), length - 1);
-}
-
-function clampFutureIndices(base, count, length) {
-  return Array.from({ length: count }, (_, offset) => clampIndex(base + offset + 1, length));
 }
 
 function readRows(rows, width) {
@@ -254,16 +192,63 @@ function remapRows(rows, sourceNames, targetNames, fallback = []) {
   });
 }
 
+function remapBodyRows(rows, sourceNames, targetNames, width, fallback) {
+  const sourceIndex = new Map((sourceNames ?? []).map((name, index) => [name, index]));
+  const parsed = readBodyRows(rows, sourceNames?.length ?? targetNames?.length ?? 0, width);
+  if (!sourceIndex.size || !targetNames?.length) {
+    return parsed;
+  }
+  return parsed.map((frameRows) => targetNames.map((name) => {
+    const source = sourceIndex.get(name);
+    return Float32Array.from(frameRows[source] ?? fallback);
+  }));
+}
+
 function normalizeFrameCache(frameCache, config) {
   const frames = frameCache?.frames ?? [];
-  const bodyNames = frameCache?.body_names ?? frameCache?.bodyNames ?? config.bodyNames;
+  const providedBodyNames = frameCache?.body_names ?? frameCache?.bodyNames;
+  const sourceBodyNames = providedBodyNames ?? config.bodyNames;
+  const bodyNames = config.bodyNames?.length ? config.bodyNames : sourceBodyNames;
+  if (providedBodyNames?.length) {
+    const requiredBodyNames = [config.rootBodyName, ...(config.keybodyNames ?? [])].filter(Boolean);
+    const missingBodyNames = requiredBodyNames.filter((name) => !providedBodyNames.includes(name));
+    if (missingBodyNames.length) {
+      throw new Error(`HoloMotion frame cache is missing required bodies: ${missingBodyNames.join(', ')}`);
+    }
+  }
   const bodyCount = bodyNames.length;
   const jointNames = frameCache?.joint_names ?? frameCache?.jointNames ?? config.policyJointNames;
   const fps = readFps(frameCache);
   const rootPos = frames.map((frame) => Float32Array.from(frame.root_translation ?? [0, 0, 0.78]));
   const rootQuat = frames.map((frame) => Float32Array.from(frame.root_rotation_wxyz ?? [1, 0, 0, 0]));
-  const bodyPos = readBodyRows(frames.map((frame) => frame.body_positions), bodyCount, 3);
-  const bodyQuat = readBodyRows(frames.map((frame) => frame.body_rotations_wxyz), bodyCount, 4);
+  const bodyPos = remapBodyRows(
+    frames.map((frame) => frame.body_positions),
+    sourceBodyNames,
+    bodyNames,
+    3,
+    [0, 0, 0]
+  );
+  const bodyQuat = remapBodyRows(
+    frames.map((frame) => frame.body_rotations_wxyz),
+    sourceBodyNames,
+    bodyNames,
+    4,
+    [1, 0, 0, 0]
+  );
+  const providedBodyLinVel = remapBodyRows(
+    frames.map((frame) => frame.body_linear_velocities),
+    sourceBodyNames,
+    bodyNames,
+    3,
+    [0, 0, 0]
+  );
+  const providedBodyAngVel = remapBodyRows(
+    frames.map((frame) => frame.body_angular_velocities),
+    sourceBodyNames,
+    bodyNames,
+    3,
+    [0, 0, 0]
+  );
   return {
     bodyNames,
     jointPos: remapRows(frames.map((frame) => frame.joint_positions), jointNames, config.policyJointNames, config.defaultJointPos),
@@ -284,7 +269,7 @@ function normalizeFrameCache(frameCache, config) {
       if (!Array.isArray(rows) || !rows.length) {
         return estimates;
       }
-      const provided = readBodyRows([rows], bodyCount, 3)[0];
+      const provided = providedBodyLinVel[index];
       return Array.from({ length: bodyCount }, (_, bodyIndex) => (
         useProvidedVectorOrEstimate(provided?.[bodyIndex], estimates[bodyIndex], 3)
       ));
@@ -295,7 +280,7 @@ function normalizeFrameCache(frameCache, config) {
       if (!Array.isArray(rows) || !rows.length) {
         return estimates;
       }
-      const provided = readBodyRows([rows], bodyCount, 3)[0];
+      const provided = providedBodyAngVel[index];
       return Array.from({ length: bodyCount }, (_, bodyIndex) => (
         useProvidedVectorOrEstimate(provided?.[bodyIndex], estimates[bodyIndex], 3)
       ));
@@ -303,10 +288,10 @@ function normalizeFrameCache(frameCache, config) {
   };
 }
 
-function makeDefaultClip(defaultJointPos, resetRootTranslation, bodyNames) {
+function makeDefaultClip(defaultJointPos, resetRootTranslation, bodyNames, rootBodyIndex = 0) {
   const bodyCount = bodyNames.length || 1;
   const bodyPos = Array.from({ length: bodyCount }, () => Float32Array.from([0, 0, Number(resetRootTranslation?.[2] ?? 0.78)]));
-  bodyPos[0] = Float32Array.from(resetRootTranslation ?? [0, 0, 0.78]);
+  bodyPos[clampIndex(rootBodyIndex, bodyCount)] = Float32Array.from(resetRootTranslation ?? [0, 0, 0.78]);
   const bodyQuat = Array.from({ length: bodyCount }, () => Float32Array.from([1, 0, 0, 0]));
   const bodyVel = Array.from({ length: bodyCount }, () => new Float32Array(3));
   return {
@@ -335,37 +320,91 @@ function yawAlignClipToState(clip, anchorIndex, state) {
   const targetRootPos = state?.rootPos;
   const targetRootQuat = state?.rootQuat;
   if (!targetRootPos || !targetRootQuat || !clip.rootPos.length) {
-    return;
+    return null;
   }
   const safeIndex = clampIndex(anchorIndex, clip.rootPos.length);
   const anchorPos = clip.rootPos[safeIndex] ?? [0, 0, 0.78];
   const qDelta = quatMultiply(yawComponent(targetRootQuat), quatInverse(yawComponent(clip.rootQuat[safeIndex])));
   const [qw, , , qz] = qDelta;
-  const rotateXY = (x, y) => [
-    (1 - 2 * qz * qz) * x - (2 * qw * qz) * y,
-    (2 * qw * qz) * x + (1 - 2 * qz * qz) * y
-  ];
-  const rotateVector = (row) => {
-    const [x, y] = rotateXY(Number(row?.[0] ?? 0), Number(row?.[1] ?? 0));
-    return Float32Array.from([x, y, Number(row?.[2] ?? 0)]);
+  return {
+    anchorPos: Float32Array.from(anchorPos),
+    qDelta: Float32Array.from(qDelta),
+    qw,
+    qz,
+    targetX: Number(targetRootPos[0] ?? 0),
+    targetY: Number(targetRootPos[1] ?? 0)
   };
-  const dxTarget = Number(targetRootPos[0] ?? 0);
-  const dyTarget = Number(targetRootPos[1] ?? 0);
+}
 
-  clip.rootPos = clip.rootPos.map((row) => {
-    const [x, y] = rotateXY(Number(row[0] ?? 0) - Number(anchorPos[0] ?? 0), Number(row[1] ?? 0) - Number(anchorPos[1] ?? 0));
-    return Float32Array.from([dxTarget + x, dyTarget + y, Number(row[2] ?? anchorPos[2] ?? 0.78)]);
-  });
-  clip.rootQuat = clip.rootQuat.map((row) => Float32Array.from(quatMultiply(qDelta, row)));
-  clip.bodyPos = clip.bodyPos.map((frameBodies) => frameBodies.map((row) => {
-    const [x, y] = rotateXY(Number(row[0] ?? 0) - Number(anchorPos[0] ?? 0), Number(row[1] ?? 0) - Number(anchorPos[1] ?? 0));
-    return Float32Array.from([dxTarget + x, dyTarget + y, Number(row[2] ?? 0)]);
-  }));
-  clip.bodyQuat = clip.bodyQuat.map((frameBodies) => frameBodies.map((row) => Float32Array.from(quatMultiply(qDelta, row))));
-  clip.rootLinVel = clip.rootLinVel.map(rotateVector);
-  clip.rootAngVel = clip.rootAngVel.map(rotateVector);
-  clip.bodyLinVel = clip.bodyLinVel.map((frameBodies) => frameBodies.map(rotateVector));
-  clip.bodyAngVel = clip.bodyAngVel.map((frameBodies) => frameBodies.map(rotateVector));
+function rotateAlignmentXY(alignment, x, y) {
+  return [
+    (1 - 2 * alignment.qz * alignment.qz) * x - (2 * alignment.qw * alignment.qz) * y,
+    (2 * alignment.qw * alignment.qz) * x + (1 - 2 * alignment.qz * alignment.qz) * y
+  ];
+}
+
+function alignPosition(row, alignment) {
+  const [x, y] = rotateAlignmentXY(
+    alignment,
+    Number(row?.[0] ?? 0) - Number(alignment.anchorPos[0] ?? 0),
+    Number(row?.[1] ?? 0) - Number(alignment.anchorPos[1] ?? 0)
+  );
+  return Float32Array.from([
+    alignment.targetX + x,
+    alignment.targetY + y,
+    Number(row?.[2] ?? alignment.anchorPos[2] ?? 0.78)
+  ]);
+}
+
+function alignVector(row, alignment) {
+  const [x, y] = rotateAlignmentXY(alignment, Number(row?.[0] ?? 0), Number(row?.[1] ?? 0));
+  return Float32Array.from([x, y, Number(row?.[2] ?? 0)]);
+}
+
+function applyYawAlignment(frame, alignment) {
+  if (!alignment) {
+    return frame;
+  }
+  return {
+    ...frame,
+    rootPos: alignPosition(frame.rootPos, alignment),
+    rootQuat: Float32Array.from(quatMultiply(alignment.qDelta, frame.rootQuat)),
+    rootLinVel: alignVector(frame.rootLinVel, alignment),
+    rootAngVel: alignVector(frame.rootAngVel, alignment),
+    bodyPos: frame.bodyPos.map((row) => alignPosition(row, alignment)),
+    bodyQuat: frame.bodyQuat.map((row) => Float32Array.from(quatMultiply(alignment.qDelta, row))),
+    bodyLinVel: frame.bodyLinVel.map((row) => alignVector(row, alignment)),
+    bodyAngVel: frame.bodyAngVel.map((row) => alignVector(row, alignment))
+  };
+}
+
+function lerpArray(start, end, alpha) {
+  const width = Math.max(start?.length ?? 0, end?.length ?? 0);
+  const out = new Float32Array(width);
+  for (let index = 0; index < width; index += 1) {
+    const from = Number(start?.[index] ?? end?.[index] ?? 0);
+    const to = Number(end?.[index] ?? from);
+    out[index] = from + (to - from) * alpha;
+  }
+  return out;
+}
+
+function slerpQuat(start, end, alpha) {
+  const from = normalizeQuat(start);
+  let to = normalizeQuat(end);
+  let dot = from.reduce((sum, value, index) => sum + value * to[index], 0);
+  if (dot < 0) {
+    to = to.map((value) => -value);
+    dot = -dot;
+  }
+  if (dot > 0.9995) {
+    return Float32Array.from(normalizeQuat(from.map((value, index) => value + (to[index] - value) * alpha)));
+  }
+  const theta = Math.acos(Math.min(1, Math.max(-1, dot)));
+  const sinTheta = Math.sin(theta);
+  const startScale = Math.sin((1 - alpha) * theta) / sinTheta;
+  const endScale = Math.sin(alpha * theta) / sinTheta;
+  return Float32Array.from(from.map((value, index) => value * startScale + to[index] * endScale));
 }
 
 class HoloMotionTracking {
@@ -381,6 +420,10 @@ class HoloMotionTracking {
     this.refLen = 1;
     this.sourceStartFrame = 0;
     this.currentDone = true;
+    this.alignment = null;
+    this.transitionLen = 0;
+    this.transitionIndex = 0;
+    this.transitionStartState = null;
     if (state) {
       this.anchorCurrentFrameToState(state);
     }
@@ -406,7 +449,20 @@ class HoloMotionTracking {
     this.refLen = this._clip().jointPos.length;
     this.sourceStartFrame = name === 'default' ? 0 : clampIndex(options.startFrame ?? 0, this.refLen);
     this.refIdx = this.sourceStartFrame;
-    this.currentDone = this.refIdx >= this.refLen - 1;
+    this.alignment = null;
+    this.transitionLen = name === 'default' || !state
+      ? 0
+      : Math.max(0, Math.floor(Number(options.transitionSteps) || 0));
+    this.transitionIndex = 0;
+    this.transitionStartState = this.transitionLen > 0 ? {
+      jointPos: Float32Array.from(state.jointPos ?? this.policy.defaultJointPos),
+      jointVel: Float32Array.from(state.jointVel ?? new Float32Array(this.policy.numActions)),
+      rootPos: Float32Array.from(state.rootPos ?? this.policy.resetRootTranslation),
+      rootQuat: Float32Array.from(state.rootQuat ?? [1, 0, 0, 0]),
+      rootLinVel: Float32Array.from(state.rootLinVel ?? [0, 0, 0]),
+      rootAngVel: Float32Array.from(state.rootAngVel ?? [0, 0, 0])
+    } : null;
+    this.currentDone = this.transitionLen === 0 && this.refIdx >= this.refLen - 1;
     if (state) {
       this.anchorCurrentFrameToState(state);
     }
@@ -414,6 +470,13 @@ class HoloMotionTracking {
   }
 
   advance() {
+    if (this._inTransition()) {
+      this.transitionIndex += 1;
+      if (!this._inTransition()) {
+        this.currentDone = this.refIdx >= this.refLen - 1;
+      }
+      return;
+    }
     if (this.refIdx < this.refLen - 1) {
       this.refIdx += 1;
     }
@@ -427,28 +490,28 @@ class HoloMotionTracking {
   }
 
   playbackState() {
+    const inTransition = this._inTransition();
     return {
       available: this.isReady(),
       currentName: this.currentName,
       currentDone: this.currentDone,
       refIdx: clampIndex(this.refIdx, this.refLen),
       refLen: this.refLen,
-      transitionLen: 0,
+      transitionLen: this.transitionLen,
       motionLen: Math.max(1, this.refLen - this.sourceStartFrame),
       sourceStartFrame: this.sourceStartFrame,
       sourceFrame: clampIndex(this.refIdx, this.refLen),
-      inTransition: false,
+      inTransition,
       isDefault: this.currentName === 'default'
     };
   }
 
   getFrame(index = this.refIdx) {
-    const clip = this._clip();
-    const idx = clampIndex(index, clip.jointPos.length);
+    const frame = this.frame(index);
     return {
-      jointPos: clip.jointPos[idx],
-      rootPos: clip.rootPos[idx],
-      rootQuat: clip.rootQuat[idx]
+      jointPos: frame.jointPos,
+      rootPos: frame.rootPos,
+      rootQuat: frame.rootQuat
     };
   }
 
@@ -457,14 +520,22 @@ class HoloMotionTracking {
       return false;
     }
     const clip = this._clip();
-    yawAlignClipToState(clip, this.refIdx, state);
-    return true;
+    this.alignment = yawAlignClipToState(clip, this.refIdx, state);
+    return Boolean(this.alignment);
   }
 
   frame(index = this.refIdx) {
+    const frame = this._sourceFrame(index);
+    if (this._inTransition() && clampIndex(index, this.refLen) === this.refIdx) {
+      return this._transitionFrame(frame, this.transitionIndex);
+    }
+    return frame;
+  }
+
+  _sourceFrame(index) {
     const clip = this._clip();
     const idx = clampIndex(index, clip.jointPos.length);
-    return {
+    return applyYawAlignment({
       clip,
       idx,
       jointPos: clip.jointPos[idx] ?? new Float32Array(this.policy.numActions),
@@ -477,11 +548,42 @@ class HoloMotionTracking {
       bodyQuat: clip.bodyQuat[idx] ?? [],
       bodyLinVel: clip.bodyLinVel[idx] ?? [],
       bodyAngVel: clip.bodyAngVel[idx] ?? []
-    };
+    }, this.alignment);
   }
 
   futureFrames(count) {
-    return clampFutureIndices(this.refIdx, count, this.refLen).map((idx) => this.frame(idx));
+    return Array.from({ length: count }, (_, offset) => {
+      const stepOffset = offset + 1;
+      if (this._inTransition()) {
+        const futureTransitionIndex = this.transitionIndex + stepOffset;
+        if (futureTransitionIndex < this.transitionLen) {
+          return this._transitionFrame(this._sourceFrame(this.refIdx), futureTransitionIndex);
+        }
+        const sourceOffset = futureTransitionIndex - this.transitionLen;
+        return this._sourceFrame(clampIndex(this.refIdx + sourceOffset, this.refLen));
+      }
+      return this._sourceFrame(clampIndex(this.refIdx + stepOffset, this.refLen));
+    });
+  }
+
+  _inTransition() {
+    return this.transitionIndex < this.transitionLen;
+  }
+
+  _transitionFrame(frame, transitionIndex) {
+    if (!this.transitionStartState || this.transitionLen <= 0) {
+      return frame;
+    }
+    const alpha = Math.min(1, Math.max(0, (transitionIndex + 1) / this.transitionLen));
+    return {
+      ...frame,
+      jointPos: lerpArray(this.transitionStartState.jointPos, frame.jointPos, alpha),
+      jointVel: lerpArray(this.transitionStartState.jointVel, frame.jointVel, alpha),
+      rootPos: lerpArray(this.transitionStartState.rootPos, frame.rootPos, alpha),
+      rootQuat: slerpQuat(this.transitionStartState.rootQuat, frame.rootQuat, alpha),
+      rootLinVel: lerpArray(this.transitionStartState.rootLinVel, frame.rootLinVel, alpha),
+      rootAngVel: lerpArray(this.transitionStartState.rootAngVel, frame.rootAngVel, alpha)
+    };
   }
 
   _clip() {
@@ -514,6 +616,8 @@ export class HoloMotionBrowserPolicy {
     this.nFutFrames = 10;
     this.keybodyNames = [];
     this.bodyNames = [];
+    this.rootBodyName = 'pelvis';
+    this.rootBodyIndex = 0;
     this.keybodyIndexes = [];
     this.obsTerms = [];
     this.refMotionFilterCutoffHz = 0;
@@ -561,12 +665,19 @@ export class HoloMotionBrowserPolicy {
     this.nFutFrames = Number(this.config.holomotion?.n_fut_frames ?? 10);
     this.keybodyNames = this.config.holomotion?.keybody_names?.slice() ?? [];
     this.bodyNames = this.config.holomotion?.body_names?.slice() ?? [];
+    this.rootBodyName = this.bodyNames.includes('pelvis') ? 'pelvis' : (this.bodyNames[0] ?? 'pelvis');
+    this.rootBodyIndex = Math.max(0, this.bodyNames.indexOf(this.rootBodyName));
     this.keybodyIndexes = this.keybodyNames.map((name) => this.bodyNames.indexOf(name)).filter((index) => index >= 0);
     this.obsTerms = this.config.holomotion?.obs_terms?.slice() ?? [];
     this.refMotionFilterCutoffHz = Number(this.config.holomotion?.ref_motion_filter_cutoff_hz ?? 0);
     this.kvShape = this.config.onnx?.meta?.input_shapes?.past_key_values?.slice() ?? this.kvShape;
     this.kvDtype = String(this.config.onnx?.meta?.kv_dtype ?? 'float32').toLowerCase();
-    this.defaultClip = makeDefaultClip(this.defaultJointPos, this.resetRootTranslation, this.bodyNames.length ? this.bodyNames : ['pelvis']);
+    this.defaultClip = makeDefaultClip(
+      this.defaultJointPos,
+      this.resetRootTranslation,
+      this.bodyNames.length ? this.bodyNames : ['pelvis'],
+      this.rootBodyIndex
+    );
     this.tracking = new HoloMotionTracking(this);
     this.lastActions = new Float32Array(this.numActions);
   }
@@ -684,9 +795,11 @@ export class HoloMotionBrowserPolicy {
   }
 
   _buildObservation(state) {
+    const frame = this.tracking.frame();
+    const future = this.tracking.futureFrames(this.nFutFrames);
     const parts = [];
     for (const term of this.obsTerms) {
-      parts.push(this._obsTerm(term, state));
+      parts.push(this._obsTerm(term, state, frame, future));
     }
     const size = parts.reduce((sum, item) => sum + item.length, 0);
     const out = new Float32Array(size);
@@ -698,9 +811,7 @@ export class HoloMotionBrowserPolicy {
     return out;
   }
 
-  _obsTerm(term, state) {
-    const frame = this.tracking.frame();
-    const future = this.tracking.futureFrames(this.nFutFrames);
+  _obsTerm(term, state, frame, future) {
     switch (term) {
       case 'actor_ref_gravity_projection_cur':
         return Float32Array.from(projectedGravity(frame.rootQuat));
@@ -745,8 +856,8 @@ export class HoloMotionBrowserPolicy {
 
   _keybodyRelPos(frame) {
     const out = new Float32Array(this.keybodyIndexes.length * 3);
-    const rootPos = bodyRow(frame.bodyPos, 0, 3);
-    const rootQuat = bodyQuatRow(frame.bodyQuat, 0);
+    const rootPos = bodyRow(frame.bodyPos, this.rootBodyIndex, 3);
+    const rootQuat = bodyQuatRow(frame.bodyQuat, this.rootBodyIndex);
     let offset = 0;
     for (const bodyIndex of this.keybodyIndexes) {
       const pos = bodyRow(frame.bodyPos, bodyIndex, 3);

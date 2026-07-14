@@ -1,3 +1,12 @@
+import {
+  cloneArray,
+  normalizeQuat,
+  quatAngularDistance,
+  quatConjugate,
+  quatMultiply,
+  toFloatArray
+} from '../shared/policyMath.js';
+
 const SONIC_MUJOCO_JOINT_ORDER = [
   'left_hip_pitch_joint',
   'left_hip_roll_joint',
@@ -39,26 +48,6 @@ const MUJOCO_TO_ISAACLAB = [
   0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10,
   16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28
 ];
-
-function cloneArray(values, fallback = []) {
-  if (!values) {
-    return Array.from(fallback);
-  }
-  return Array.from(values);
-}
-
-function toFloatArray(value, length, fallback = 0) {
-  const out = new Float32Array(length);
-  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-    for (let index = 0; index < length; index += 1) {
-      const next = Number(value[index]);
-      out[index] = Number.isFinite(next) ? next : fallback;
-    }
-    return out;
-  }
-  out.fill(Number.isFinite(Number(value)) ? Number(value) : fallback);
-  return out;
-}
 
 function hasFiniteVector(values, width) {
   if (!values || values.length < width) {
@@ -266,19 +255,6 @@ function finiteArray(values, length, fallback = 0) {
   return out;
 }
 
-function normalizeQuat(quat) {
-  const w = Number(quat?.[0] ?? 1);
-  const x = Number(quat?.[1] ?? 0);
-  const y = Number(quat?.[2] ?? 0);
-  const z = Number(quat?.[3] ?? 0);
-  const norm = Math.hypot(w, x, y, z);
-  if (!Number.isFinite(norm) || norm < 1e-9) {
-    return [1, 0, 0, 0];
-  }
-  const inv = 1 / norm;
-  return [w * inv, x * inv, y * inv, z * inv];
-}
-
 function maxAbs(values, width = values?.length ?? 0) {
   let result = 0;
   for (let index = 0; index < width; index += 1) {
@@ -299,34 +275,6 @@ function maxAbsDiff(a, b, width = Math.max(a?.length ?? 0, b?.length ?? 0)) {
     }
   }
   return result;
-}
-
-function quatAngularDistance(a, b) {
-  const qa = normalizeQuat(a);
-  const qb = normalizeQuat(b);
-  const dot = Math.abs(
-    qa[0] * qb[0]
-    + qa[1] * qb[1]
-    + qa[2] * qb[2]
-    + qa[3] * qb[3]
-  );
-  return 2 * Math.acos(Math.min(1, Math.max(-1, dot)));
-}
-
-function quatConjugate(quat) {
-  const [w, x, y, z] = normalizeQuat(quat);
-  return [w, -x, -y, -z];
-}
-
-function quatMultiply(a, b) {
-  const [aw, ax, ay, az] = normalizeQuat(a);
-  const [bw, bx, by, bz] = normalizeQuat(b);
-  return normalizeQuat([
-    aw * bw - ax * bx - ay * by - az * bz,
-    aw * bx + ax * bw + ay * bz - az * by,
-    aw * by - ax * bz + ay * bw + az * bx,
-    aw * bz + ax * by - ay * bx + az * bw
-  ]);
 }
 
 function quatRotate(quat, vector) {

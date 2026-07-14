@@ -5,10 +5,10 @@ import json
 import mimetypes
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .exporters import _default_export_format, export_trimmed_sequence
@@ -19,6 +19,8 @@ from .models import (
     BrowserListResponse,
     FrameSliceResponse,
     GetFramesRequest,
+    HoloMotionV13InferRequest,
+    HumanoidGPTInferRequest,
     LoadClipRequest,
     LoadClipResponse,
     LoopRequest,
@@ -57,13 +59,61 @@ static_dir = package_dir / "static"
 frontend_dir = repo_root / "frontend"
 frontend_dist_dir = frontend_dir / "dist"
 frontend_public_dir = frontend_dir / "public"
-onnxruntime_web_dist_dir = frontend_dir / "node_modules" / "onnxruntime-web" / "dist"
 policy_plugins_dir = repo_root / "policy_plugins"
 browser_scene_index_path = frontend_public_dir / "examples" / "scenes" / "files.json"
+INFERENCE_BODY_LIMIT_BYTES = 256 * 1024
+INFERENCE_PATHS = frozenset({"/api/holomotion-v13/infer", "/api/humanoid-gpt/infer"})
 
 _default_controller = SessionController()
 _renderer: ThreadedMujocoRenderer | None = None
 _renderer_error: str | None = None
+
+
+class _InferenceBodyTooLarge(Exception):
+    pass
+
+
+class InferenceBodyLimitMiddleware:
+    def __init__(self, app: Any, max_body_bytes: int = INFERENCE_BODY_LIMIT_BYTES) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or scope.get("path") not in INFERENCE_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_body_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                await self._reject(scope, receive, send)
+                return
+
+        received = 0
+
+        async def limited_receive() -> dict[str, Any]:
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body") or b"")
+                if received > self.max_body_bytes:
+                    raise _InferenceBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _InferenceBodyTooLarge:
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        response = JSONResponse({"detail": "Inference request body is too large"}, status_code=413)
+        await response(scope, receive, send)
 
 
 def _init_renderer() -> None:
@@ -174,23 +224,12 @@ def _browser_scene_files() -> list[str]:
 def create_app(controller: SessionController | None = None) -> FastAPI:
     session = controller or _default_controller
     app = FastAPI(title="G1 Unified Viewer", version="0.2.0")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(InferenceBodyLimitMiddleware)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     if (frontend_dist_dir / "assets").exists():
         app.mount("/assets", StaticFiles(directory=frontend_dist_dir / "assets"), name="frontend-assets")
     if (frontend_public_dir / "examples").exists():
         app.mount("/examples", StaticFiles(directory=frontend_public_dir / "examples"), name="examples")
-    if onnxruntime_web_dist_dir.exists():
-        app.mount(
-            "/node_modules/onnxruntime-web/dist",
-            StaticFiles(directory=onnxruntime_web_dist_dir),
-            name="onnxruntime-web-dist",
-        )
     if policy_plugins_dir.exists():
         app.mount("/policy-plugins", StaticFiles(directory=policy_plugins_dir), name="policy-plugins")
     app.state.controller = session
@@ -208,6 +247,13 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
         if icon_path is None:
             raise HTTPException(status_code=404, detail="favicon not found")
         return FileResponse(icon_path, media_type="image/vnd.microsoft.icon")
+
+    @app.get("/favicon.svg")
+    def favicon_svg() -> FileResponse:
+        icon_path = _frontend_public_file_path("favicon.svg")
+        if icon_path is None:
+            raise HTTPException(status_code=404, detail="favicon not found")
+        return FileResponse(icon_path, media_type="image/svg+xml")
 
     @app.get("/api/assets/browser-scene")
     def api_browser_scene() -> dict[str, object]:
@@ -543,16 +589,16 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/holomotion-v13/infer")
-    def api_holomotion_v13_infer(payload: dict[str, object]) -> dict[str, object]:
+    def api_holomotion_v13_infer(request: HoloMotionV13InferRequest) -> dict[str, object]:
         try:
-            return infer_holomotion_v13(payload)
+            return infer_holomotion_v13(request.model_dump(exclude_unset=True, exclude_none=True))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/humanoid-gpt/infer")
-    def api_humanoid_gpt_infer(payload: dict[str, object]) -> dict[str, object]:
+    def api_humanoid_gpt_infer(request: HumanoidGPTInferRequest) -> dict[str, object]:
         try:
-            return infer_humanoid_gpt(payload)
+            return infer_humanoid_gpt(request.model_dump(exclude_unset=True, exclude_none=True))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

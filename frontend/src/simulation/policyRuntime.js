@@ -1,4 +1,3 @@
-import * as ort from 'onnxruntime-web';
 import { Observations } from './observationHelpers.js';
 import { TrackingHelper } from './trackingHelper.js';
 import {
@@ -12,11 +11,18 @@ import {
   yawComponent
 } from './utils/math.js';
 
-const ORT_WASM_ASSET_PATH = '/node_modules/onnxruntime-web/dist/';
 const BROWSER_POLICY_MODULE_CACHE_BUST = Date.now().toString(36);
+let ort = null;
+let ortLoadPromise = null;
 
-if (ort.env?.wasm) {
-  ort.env.wasm.wasmPaths = ORT_WASM_ASSET_PATH;
+async function loadOnnxRuntime() {
+  if (!ortLoadPromise) {
+    ortLoadPromise = import('onnxruntime-web').then((runtime) => {
+      ort = runtime;
+      return runtime;
+    });
+  }
+  return ortLoadPromise;
 }
 
 export const DEFAULT_BROWSER_POLICY_MANIFESTS = Object.freeze([
@@ -104,9 +110,9 @@ async function importBrowserPolicyModule(modulePath) {
   return import(/* @vite-ignore */ cacheBustedPath);
 }
 
-function makeBrowserPolicyHost() {
+function makeBrowserPolicyHost(ortRuntime) {
   return {
-    ort,
+    ort: ortRuntime,
     loadPolicyConfig,
     resolveStaticAssetPath,
     normalizeFrameCacheAsMotionClip,
@@ -174,9 +180,26 @@ function makeDefaultStanceTarget({
   return target;
 }
 
-async function loadPolicyConfig(configPath, { required = true } = {}) {
+function mergePolicyConfig(base, override) {
+  if (!base || typeof base !== 'object' || Array.isArray(base)) {
+    return override;
+  }
+  if (!override || typeof override !== 'object' || Array.isArray(override)) {
+    return override;
+  }
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    merged[key] = key in base ? mergePolicyConfig(base[key], value) : value;
+  }
+  return merged;
+}
+
+async function loadPolicyConfig(configPath, { required = true, ancestors = new Set() } = {}) {
   if (!configPath) {
     return null;
+  }
+  if (ancestors.has(configPath)) {
+    throw new Error(`Circular browser policy config inheritance: ${configPath}`);
   }
   let response;
   try {
@@ -193,7 +216,17 @@ async function loadPolicyConfig(configPath, { required = true } = {}) {
     }
     throw new Error(`Failed to load browser policy config: ${response.status}`);
   }
-  return response.json();
+  const config = await response.json();
+  const parentRef = typeof config?.extends === 'string' ? config.extends.trim() : '';
+  if (!parentRef) {
+    return config;
+  }
+  const nextAncestors = new Set(ancestors);
+  nextAncestors.add(configPath);
+  const parentPath = resolveStaticAssetPath(configPath, parentRef);
+  const parent = await loadPolicyConfig(parentPath, { required: true, ancestors: nextAncestors });
+  const { extends: _extends, ...override } = config;
+  return mergePolicyConfig(parent, override);
 }
 
 function referenceToPolicyState(reference, policyJointNames) {
@@ -381,6 +414,7 @@ export class BrowserOnnxPolicy {
     if (!this.manifest?.config_path) {
       throw new Error('ONNX policy manifest missing config_path.');
     }
+    const runtime = await loadOnnxRuntime();
     const rawConfig = await loadPolicyConfig(this.manifest.config_path);
     const tracking = await this._loadTrackingConfig(rawConfig);
     this.config = { ...rawConfig, tracking };
@@ -416,7 +450,7 @@ export class BrowserOnnxPolicy {
       throw new Error(`Failed to load ONNX policy model: ${modelResponse.status}`);
     }
     const modelArrayBuffer = await modelResponse.arrayBuffer();
-    this.session = await ort.InferenceSession.create(modelArrayBuffer, {
+    this.session = await runtime.InferenceSession.create(modelArrayBuffer, {
       executionProviders: ['wasm'],
       graphOptimizationLevel: 'all'
     });
@@ -706,12 +740,13 @@ export class BrowserPolicyRuntime {
     if (manifest.framework === 'mock') {
       nextPolicy = new MockPassthroughPolicy(manifest);
     } else if (manifest.framework === 'custom_js') {
+      const runtime = await loadOnnxRuntime();
       const modulePath = resolveStaticAssetPath(manifest.config_path || '/', manifest.module_path);
       const module = await importBrowserPolicyModule(modulePath);
       if (typeof module.createBrowserPolicy !== 'function') {
         throw new Error(`Custom browser policy module missing createBrowserPolicy(): ${modulePath}`);
       }
-      nextPolicy = await module.createBrowserPolicy(manifest, makeBrowserPolicyHost());
+      nextPolicy = await module.createBrowserPolicy(manifest, makeBrowserPolicyHost(runtime));
     } else {
       nextPolicy = new BrowserOnnxPolicy(manifest);
     }

@@ -51,6 +51,31 @@ class HumanoidGPTDownloaderTest(unittest.TestCase):
             self.assertEqual(payload["humanoid_gpt"]["source_repo"], downloader.REPO_ID)
             self.assertEqual(payload["humanoid_gpt"]["checkpoint_path"], downloader.CHECKPOINT_REPO_PATH)
 
+    def test_validation_failure_preserves_existing_installation(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ckpt_dir = root / "snapshot" / "storage" / "ckpts"
+            ckpt_dir.mkdir(parents=True)
+            (ckpt_dir / "pns_wo_priv216.onnx").write_bytes(b"invalid new onnx")
+            plugin_dir = root / "plugin"
+            plugin_dir.mkdir()
+            model_path = plugin_dir / "model.onnx"
+            config_path = plugin_dir / "humanoid_gpt_policy_config.json"
+            model_path.write_bytes(b"working old onnx")
+            config_path.write_text('{"working": true}\n', encoding="utf-8")
+
+            with (
+                patch.object(downloader, "PLUGIN_DIR", plugin_dir),
+                patch.object(downloader, "CONFIG_PATH", config_path),
+                patch.object(downloader, "MODEL_PATH", model_path),
+                patch.object(downloader, "_read_onnx_session_metadata", side_effect=RuntimeError("invalid model")),
+                self.assertRaisesRegex(RuntimeError, "invalid model"),
+            ):
+                downloader.install_assets(root / "snapshot")
+
+            self.assertEqual(model_path.read_bytes(), b"working old onnx")
+            self.assertEqual(config_path.read_text(encoding="utf-8"), '{"working": true}\n')
+
 
 if __name__ == "__main__":
     unittest.main()

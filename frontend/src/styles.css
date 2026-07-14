@@ -2150,6 +2150,11 @@ pre {
     border-radius: 24px;
   }
 
+  .topbar-status-strip {
+    min-width: 0;
+    width: 100%;
+  }
+
   .two-col,
   .three-col,
   .export-grid,
@@ -2161,6 +2166,7 @@ pre {
   }
 
   .topbar-toolbar {
+    width: 100%;
     justify-content: space-between;
   }
 

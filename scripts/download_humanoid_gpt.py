@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import tempfile
 import sys
 from pathlib import Path
 from typing import Any
@@ -151,11 +153,25 @@ def download_checkpoint(output_path: Path) -> Path:
 
 def install_assets(snapshot_root: Path) -> Path:
     checkpoint_path = _find_checkpoint(snapshot_root)
-    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(checkpoint_path, MODEL_PATH)
-    model_meta = _read_onnx_session_metadata(MODEL_PATH)
+    model_meta = _read_onnx_session_metadata(checkpoint_path)
     config = _build_config(model_meta)
-    CONFIG_PATH.write_text(json.dumps(config, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    config_text = json.dumps(config, indent=2, allow_nan=False) + "\n"
+
+    PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+    model_fd, model_temp_name = tempfile.mkstemp(prefix=".model-", suffix=".onnx", dir=PLUGIN_DIR)
+    config_fd, config_temp_name = tempfile.mkstemp(prefix=".config-", suffix=".json", dir=PLUGIN_DIR)
+    os.close(model_fd)
+    os.close(config_fd)
+    model_temp = Path(model_temp_name)
+    config_temp = Path(config_temp_name)
+    try:
+        shutil.copy2(checkpoint_path, model_temp)
+        config_temp.write_text(config_text, encoding="utf-8")
+        os.replace(model_temp, MODEL_PATH)
+        os.replace(config_temp, CONFIG_PATH)
+    finally:
+        model_temp.unlink(missing_ok=True)
+        config_temp.unlink(missing_ok=True)
     return MODEL_PATH
 
 

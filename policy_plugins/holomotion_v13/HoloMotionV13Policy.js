@@ -42,8 +42,6 @@ export class HoloMotionV13BrowserPolicy extends HoloMotionBrowserPolicy {
         obs: Array.from(obs),
         cache_id: this.backendCacheId,
         reset_cache: this.backendCacheNeedsReset,
-        past_key_values: null,
-        past_key_values_shape: this.kvInputName ? this.kvShape : null,
         step_idx: this.stepIndex
       })
     });

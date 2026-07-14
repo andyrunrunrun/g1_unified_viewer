@@ -38,6 +38,11 @@ test('viewer uses cached browser frames instead of high-frequency session state 
   assert.match(source, /pollHandle = window\.setInterval\(refreshSession, SESSION_POLL_INTERVAL_MS\)/);
 });
 
+test('viewer implementation is loaded as a separate runtime chunk', () => {
+  assert.doesNotMatch(source, /import \{ BrowserMujocoViewer \} from ['"`]\.\/simulation\/browserMujocoViewer\.js['"`]/);
+  assert.match(source, /await import\(['"`]\.\/simulation\/browserMujocoViewer\.js['"`]\)/);
+});
+
 test('motion frame cache loads in cancellable chunks without blocking session polling', () => {
   assert.match(apiSource, /export async function postJson\(url,\s*payload,\s*options = \{\}\)/);
   assert.match(apiSource, /signal:\s*options\.signal/);

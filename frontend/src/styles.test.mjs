@@ -105,6 +105,13 @@ test('top command bar keeps its two-column header at the main layout breakpoint'
   assert.match(styles, /@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*\.viewer-overlay\s*\{[\s\S]*grid-template-columns:\s*1fr/);
 });
 
+test('top command bar cannot force horizontal scrolling on narrow screens', () => {
+  const mobileLayoutMedia = styles.match(/@media\s*\(max-width:\s*720px\)\s*\{(?<body>[\s\S]*?)\n\}/);
+  assert.ok(mobileLayoutMedia, 'missing 720px layout breakpoint');
+  assert.match(mobileLayoutMedia.groups.body, /\.topbar-status-strip\s*\{[\s\S]*min-width:\s*0;[\s\S]*width:\s*100%/);
+  assert.match(mobileLayoutMedia.groups.body, /\.topbar-toolbar\s*\{[\s\S]*width:\s*100%;[\s\S]*justify-content:\s*space-between/);
+});
+
 test('motion start transition toggle is compact and cannot stretch the motion panel', () => {
   assert.match(styles, /\.toggle-row\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\)/);
   assert.match(styles, /\.toggle-row\s*\{[\s\S]*border:\s*1px solid var\(--line\)/);
