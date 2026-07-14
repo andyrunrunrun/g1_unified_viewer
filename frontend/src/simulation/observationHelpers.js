@@ -41,6 +41,43 @@ class RootAngVelB {
   }
 }
 
+class RootAngVelBHistory {
+  constructor(policy, kwargs = {}) {
+    this.steps = (kwargs.history_steps ?? [0, 1, 2, 3, 4, 8, 12, 16, 20]).slice();
+    this.maxStep = Math.max(...this.steps);
+    this.history = Array.from({ length: this.maxStep + 1 }, () => new Float32Array(3));
+  }
+
+  get size() {
+    return this.steps.length * 3;
+  }
+
+  reset(state) {
+    const source = state?.rootAngVel ?? new Float32Array(3);
+    this.history[0].set(source);
+    for (let i = 1; i < this.history.length; i += 1) {
+      this.history[i].set(this.history[0]);
+    }
+  }
+
+  update(state) {
+    for (let i = this.history.length - 1; i > 0; i -= 1) {
+      this.history[i].set(this.history[i - 1]);
+    }
+    this.history[0].set(state.rootAngVel);
+  }
+
+  compute() {
+    const out = new Float32Array(this.size);
+    let offset = 0;
+    for (const step of this.steps) {
+      out.set(this.history[Math.min(step, this.history.length - 1)], offset);
+      offset += 3;
+    }
+    return out;
+  }
+}
+
 class ProjectedGravityB {
   constructor() {
     this.gravity = new THREE.Vector3(0, 0, -1);
@@ -55,6 +92,50 @@ class ProjectedGravityB {
     const quatObj = new THREE.Quaternion(quat[1], quat[2], quat[3], quat[0]);
     const gravityLocal = this.gravity.clone().applyQuaternion(quatObj.clone().invert());
     return new Float32Array([gravityLocal.x, gravityLocal.y, gravityLocal.z]);
+  }
+}
+
+class ProjectedGravityBHistory {
+  constructor(policy, kwargs = {}) {
+    this.steps = (kwargs.history_steps ?? [0, 1, 2, 3, 4, 8, 12, 16, 20]).slice();
+    this.maxStep = Math.max(...this.steps);
+    this.history = Array.from({ length: this.maxStep + 1 }, () => new Float32Array(3));
+    this.gravity = new THREE.Vector3(0, 0, -1);
+  }
+
+  get size() {
+    return this.steps.length * 3;
+  }
+
+  _project(state) {
+    const quat = state?.rootQuat ?? [1, 0, 0, 0];
+    const quatObj = new THREE.Quaternion(quat[1], quat[2], quat[3], quat[0]);
+    const gravityLocal = this.gravity.clone().applyQuaternion(quatObj.clone().invert());
+    return new Float32Array([gravityLocal.x, gravityLocal.y, gravityLocal.z]);
+  }
+
+  reset(state) {
+    this.history[0].set(this._project(state));
+    for (let i = 1; i < this.history.length; i += 1) {
+      this.history[i].set(this.history[0]);
+    }
+  }
+
+  update(state) {
+    for (let i = this.history.length - 1; i > 0; i -= 1) {
+      this.history[i].set(this.history[i - 1]);
+    }
+    this.history[0].set(this._project(state));
+  }
+
+  compute() {
+    const out = new Float32Array(this.size);
+    let offset = 0;
+    for (const step of this.steps) {
+      out.set(this.history[Math.min(step, this.history.length - 1)], offset);
+      offset += 3;
+    }
+    return out;
   }
 }
 
@@ -89,6 +170,44 @@ class JointPos {
     const out = new Float32Array(this.size);
     let offset = 0;
     for (const step of this.posSteps) {
+      out.set(this.history[Math.min(step, this.history.length - 1)], offset);
+      offset += this.numJoints;
+    }
+    return out;
+  }
+}
+
+class JointVel {
+  constructor(policy, kwargs = {}) {
+    this.velSteps = (kwargs.vel_steps ?? [0, 1, 2, 3, 4, 8, 12, 16, 20]).slice();
+    this.numJoints = policy.numActions;
+    this.maxStep = Math.max(...this.velSteps);
+    this.history = Array.from({ length: this.maxStep + 1 }, () => new Float32Array(this.numJoints));
+  }
+
+  get size() {
+    return this.velSteps.length * this.numJoints;
+  }
+
+  reset(state) {
+    const source = state?.jointVel ?? new Float32Array(this.numJoints);
+    this.history[0].set(source);
+    for (let i = 1; i < this.history.length; i += 1) {
+      this.history[i].set(this.history[0]);
+    }
+  }
+
+  update(state) {
+    for (let i = this.history.length - 1; i > 0; i -= 1) {
+      this.history[i].set(this.history[i - 1]);
+    }
+    this.history[0].set(state.jointVel);
+  }
+
+  compute() {
+    const out = new Float32Array(this.size);
+    let offset = 0;
+    for (const step of this.velSteps) {
       out.set(this.history[Math.min(step, this.history.length - 1)], offset);
       offset += this.numJoints;
     }
@@ -258,8 +377,11 @@ export const Observations = {
   BootIndicator,
   ComplianceFlagObs,
   RootAngVelB,
+  RootAngVelBHistory,
   ProjectedGravityB,
+  ProjectedGravityBHistory,
   JointPos,
+  JointVel,
   TrackingCommandObsRaw,
   TargetRootZObs,
   TargetJointPosObs,

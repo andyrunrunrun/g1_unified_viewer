@@ -12,6 +12,13 @@ import {
   yawComponent
 } from './utils/math.js';
 
+const ORT_WASM_ASSET_PATH = '/node_modules/onnxruntime-web/dist/';
+const BROWSER_POLICY_MODULE_CACHE_BUST = Date.now().toString(36);
+
+if (ort.env?.wasm) {
+  ort.env.wasm.wasmPaths = ORT_WASM_ASSET_PATH;
+}
+
 export const DEFAULT_BROWSER_POLICY_MANIFESTS = Object.freeze([
   {
     policy_id: 'mock_passthrough',
@@ -89,10 +96,12 @@ async function importBrowserPolicyModule(modulePath) {
   if (!modulePath) {
     throw new Error('Custom browser policy manifest missing module_path.');
   }
+  const separator = modulePath.includes('?') ? '&' : '?';
+  const cacheBustedPath = `${modulePath}${separator}g1_policy_module=${BROWSER_POLICY_MODULE_CACHE_BUST}`;
   if (typeof globalThis.__g1ImportBrowserPolicyModule === 'function') {
-    return globalThis.__g1ImportBrowserPolicyModule(modulePath);
+    return globalThis.__g1ImportBrowserPolicyModule(cacheBustedPath);
   }
-  return import(/* @vite-ignore */ modulePath);
+  return import(/* @vite-ignore */ cacheBustedPath);
 }
 
 function makeBrowserPolicyHost() {
@@ -720,8 +729,11 @@ export class BrowserPolicyRuntime {
     this.lastOutput = null;
   }
 
-  reset() {
-    this.activePolicy?.reset?.();
+  reset(statePayload = null) {
+    const state = statePayload?.state
+      ? referenceToPolicyState(statePayload, this.activePolicy?.policyJointNames ?? [])
+      : statePayload;
+    this.activePolicy?.reset?.(state);
     this.lastOutput = null;
   }
 

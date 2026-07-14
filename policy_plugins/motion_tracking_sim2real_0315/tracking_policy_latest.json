@@ -23,7 +23,7 @@
         ]
       ]
     },
-    "path": "./policy_latest.onnx"
+    "path": "./policy_sim2real_0315.onnx"
   },
   "control_dt": 0.02,
   "obs_config": {

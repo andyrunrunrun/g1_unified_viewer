@@ -1,0 +1,26 @@
+{
+  "policy_id": "humanoid_gpt_motion_tracking",
+  "display_name": "Humanoid-GPT Motion Tracking",
+  "display_name_i18n": {
+    "zh": "Humanoid-GPT 动作追踪",
+    "en": "Humanoid-GPT Motion Tracking"
+  },
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "custom_js",
+  "format_id": "humanoid_gpt",
+  "module_path": "./HumanoidGPTPolicy.js",
+  "config_path": "/policy-plugins/humanoid_gpt/humanoid_gpt_policy_config.json",
+  "control_mode": "joint_position_target",
+  "tags": [
+    "browser",
+    "onnx",
+    "humanoid-gpt",
+    "tracking"
+  ],
+  "description": "Backend-assisted ONNX Runtime policy adapter for the Humanoid-GPT G1 motion tracking model.",
+  "description_i18n": {
+    "zh": "后端 ONNX Runtime Humanoid-GPT G1 动作追踪策略。",
+    "en": "Backend-assisted ONNX Runtime Humanoid-GPT G1 motion tracking policy."
+  }
+}

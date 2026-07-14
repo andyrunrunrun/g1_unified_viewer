@@ -92,13 +92,23 @@ class SessionController:
             self._last_error = None
             return list(self._items)
 
-    def list_browser(self, path_str: str) -> tuple[str, str | None, list[BrowserNode]]:
-        root, parent, nodes = list_browser_nodes(path_str)
+    def list_browser(
+        self,
+        path_str: str,
+        *,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> tuple[str, str | None, list[BrowserNode], int, int, int, bool]:
+        root, parent, nodes, total_count, page_offset, page_limit, has_more = list_browser_nodes(
+            path_str,
+            limit=limit,
+            offset=offset,
+        )
         with self._lock:
             self._catalog_root = root
             self._items = []
             self._last_error = None
-        return root, parent, nodes
+        return root, parent, nodes, total_count, page_offset, page_limit, has_more
 
     def load_clip(self, path_str: str, format_hint: str | None = None) -> StateSequence:
         sequence = load_sequence(path_str, format_hint)

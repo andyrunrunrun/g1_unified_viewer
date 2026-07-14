@@ -1,0 +1,36 @@
+{
+  "format_id": "motion_tracking_sim2real_0315",
+  "display_name": "Motion Tracking Sim2Real 0315",
+  "display_name_i18n": {
+    "zh": "运动追踪 Sim2Real 0315",
+    "en": "Motion Tracking Sim2Real 0315"
+  },
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "onnx",
+  "control_mode": "joint_position_target",
+  "config_template": "tracking_policy_latest.json",
+  "policy_id_prefix": "motion_tracking_sim2real_0315",
+  "tags": [
+    "onnx",
+    "browser",
+    "tracking",
+    "1590",
+    "sim2real"
+  ],
+  "description": "Browser ONNX Runtime Web motion tracking policy from G1TRACKING-03-16_14-15_0315.2.",
+  "description_i18n": {
+    "zh": "来自 G1TRACKING-03-16_14-15_0315.2 的浏览器 ONNX Runtime Web 运动追踪策略。",
+    "en": "Browser ONNX Runtime Web motion tracking policy from G1TRACKING-03-16_14-15_0315.2."
+  },
+  "model_overrides": {
+    "policy_sim2real_0315.onnx": {
+      "policy_id": "motion_tracking_sim2real_0315",
+      "display_name": "Motion Tracking / Sim2Real 0315",
+      "display_name_i18n": {
+        "zh": "运动追踪 / Sim2Real 0315",
+        "en": "Motion Tracking / Sim2Real 0315"
+      }
+    }
+  }
+}

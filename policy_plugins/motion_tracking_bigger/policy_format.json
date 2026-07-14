@@ -1,0 +1,35 @@
+{
+  "format_id": "motion_tracking_bigger",
+  "display_name": "Motion Tracking Bigger",
+  "display_name_i18n": {
+    "zh": "运动追踪 Bigger",
+    "en": "Motion Tracking Bigger"
+  },
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "onnx",
+  "control_mode": "joint_position_target",
+  "config_template": "tracking_policy_latest.json",
+  "policy_id_prefix": "motion_tracking_bigger",
+  "tags": [
+    "onnx",
+    "browser",
+    "tracking",
+    "bigger"
+  ],
+  "description": "Browser ONNX Runtime Web motion tracking policy exported from track_bigger_finetune_0701.",
+  "description_i18n": {
+    "zh": "从 track_bigger_finetune_0701 导出的浏览器 ONNX Runtime Web 运动追踪策略。",
+    "en": "Browser ONNX Runtime Web motion tracking policy exported from track_bigger_finetune_0701."
+  },
+  "model_overrides": {
+    "track_bigger_finetune_0701.onnx": {
+      "policy_id": "motion_tracking_bigger",
+      "display_name": "Motion Tracking / Bigger Finetune 0701",
+      "display_name_i18n": {
+        "zh": "运动追踪 / Bigger Finetune 0701",
+        "en": "Motion Tracking / Bigger Finetune 0701"
+      }
+    }
+  }
+}

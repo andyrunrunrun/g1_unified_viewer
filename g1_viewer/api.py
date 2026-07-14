@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .exporters import _default_export_format, export_trimmed_sequence
+from .holomotion_v13 import infer_holomotion_v13
+from .humanoid_gpt import infer_humanoid_gpt
 from .models import (
     BrowserListRequest,
     BrowserListResponse,
@@ -48,12 +50,14 @@ from .sim import ThreadedMujocoRenderer, fallback_png
 
 logger = logging.getLogger(__name__)
 mimetypes.add_type("application/octet-stream", ".onnx")
+mimetypes.add_type("text/javascript", ".mjs")
 package_dir = Path(__file__).resolve().parent
 repo_root = package_dir.parent
 static_dir = package_dir / "static"
 frontend_dir = repo_root / "frontend"
 frontend_dist_dir = frontend_dir / "dist"
 frontend_public_dir = frontend_dir / "public"
+onnxruntime_web_dist_dir = frontend_dir / "node_modules" / "onnxruntime-web" / "dist"
 policy_plugins_dir = repo_root / "policy_plugins"
 browser_scene_index_path = frontend_public_dir / "examples" / "scenes" / "files.json"
 
@@ -181,6 +185,12 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
         app.mount("/assets", StaticFiles(directory=frontend_dist_dir / "assets"), name="frontend-assets")
     if (frontend_public_dir / "examples").exists():
         app.mount("/examples", StaticFiles(directory=frontend_public_dir / "examples"), name="examples")
+    if onnxruntime_web_dist_dir.exists():
+        app.mount(
+            "/node_modules/onnxruntime-web/dist",
+            StaticFiles(directory=onnxruntime_web_dist_dir),
+            name="onnxruntime-web-dist",
+        )
     if policy_plugins_dir.exists():
         app.mount("/policy-plugins", StaticFiles(directory=policy_plugins_dir), name="policy-plugins")
     app.state.controller = session
@@ -249,8 +259,20 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
     @app.post("/api/browser/list", response_model=BrowserListResponse)
     def api_browser_list(request: BrowserListRequest) -> BrowserListResponse:
         try:
-            root, parent, nodes = get_controller().list_browser(request.path)
-            return BrowserListResponse(root=root, parent=parent, nodes=nodes)
+            root, parent, nodes, total_count, offset, limit, has_more = get_controller().list_browser(
+                request.path,
+                limit=request.limit,
+                offset=request.offset,
+            )
+            return BrowserListResponse(
+                root=root,
+                parent=parent,
+                nodes=nodes,
+                total_count=total_count,
+                offset=offset,
+                limit=limit,
+                has_more=has_more,
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -517,6 +539,20 @@ def create_app(controller: SessionController | None = None) -> FastAPI:
             )
         except PolicyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/holomotion-v13/infer")
+    def api_holomotion_v13_infer(payload: dict[str, object]) -> dict[str, object]:
+        try:
+            return infer_holomotion_v13(payload)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/humanoid-gpt/infer")
+    def api_humanoid_gpt_infer(payload: dict[str, object]) -> dict[str, object]:
+        try:
+            return infer_humanoid_gpt(payload)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -12,6 +12,9 @@ import {
 } from './policyRuntime.js';
 import { TrackingHelper } from './trackingHelper.js';
 import { quatToRot6d } from './utils/math.js';
+import { createBrowserPolicy as createHoloMotionBrowserPolicy } from '../../../policy_plugins/holomotion/HoloMotionPolicy.js';
+import { createBrowserPolicy as createHoloMotionV13BrowserPolicy } from '../../../policy_plugins/holomotion_v13/HoloMotionV13Policy.js';
+import { createBrowserPolicy as createHumanoidGPTBrowserPolicy } from '../../../policy_plugins/humanoid_gpt/HumanoidGPTPolicy.js';
 import { createBrowserPolicy as createSonicBrowserPolicy } from '../../../policy_plugins/sonic/SonicPolicy.js';
 
 const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'));
@@ -21,8 +24,25 @@ function roundZeros(value) {
   return Math.abs(rounded) < 1e-9 ? 0 : rounded;
 }
 
+async function withMockedFetch(fetchImpl, callback) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    return await callback();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 test('frontend declares onnxruntime-web for browser ONNX policy inference', () => {
   assert.equal(typeof packageJson.dependencies['onnxruntime-web'], 'string');
+});
+
+test('browser ONNX policy pins ONNX Runtime Web wasm assets to Vite-served node_modules', () => {
+  const source = readFileSync(new URL('./policyRuntime.js', import.meta.url), 'utf-8');
+
+  assert.match(source, /const ORT_WASM_ASSET_PATH = ['"`]\/node_modules\/onnxruntime-web\/dist\/['"`]/);
+  assert.match(source, /ort\.env\.wasm\.wasmPaths\s*=\s*ORT_WASM_ASSET_PATH/);
 });
 
 test('fallback browser policy manifests expose mock passthrough and motion tracking policies', () => {
@@ -93,7 +113,8 @@ test('browser policy runtime activates custom JS policy plugins through the mani
 
     const output = await runtime.step({});
 
-    assert.deepEqual(calls, ['/policy-plugins/sonic/SonicPolicy.js']);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /^\/policy-plugins\/sonic\/SonicPolicy\.js\?g1_policy_module=/);
     assert.equal(runtime.activePolicyId, 'sonic');
     assert.deepEqual(output.joint_positions, [0.1]);
     assert.deepEqual(runtime.defaultStance().joint_positions, [0]);
@@ -133,6 +154,900 @@ test('SONIC browser plugin is registered as a custom JS policy with local model 
   assert.equal(existsSync(new URL('model_decoder.onnx', pluginDir)), true);
   assert.match(moduleSource, /export async function createBrowserPolicy/);
   assert.match(moduleSource, /class SonicBrowserPolicy/);
+});
+
+test('SONIC action scales match the official deployment parameters for 5020 lower-body joints', () => {
+  const config = JSON.parse(readFileSync(new URL('../../../policy_plugins/sonic/sonic_policy.json', import.meta.url), 'utf-8'));
+  const expected5020Scale = 0.438577314;
+
+  for (const index of [4, 5, 10, 11, 13, 14]) {
+    assert.equal(Number(config.action_scale[index].toFixed(9)), expected5020Scale);
+  }
+});
+
+test('HoloMotion browser plugin is registered as a custom JS policy with local model assets', () => {
+  const pluginDir = new URL('../../../policy_plugins/holomotion/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('policy.json', pluginDir), 'utf-8'));
+  const config = JSON.parse(readFileSync(new URL('holomotion_policy_config.json', pluginDir), 'utf-8'));
+  const moduleSource = readFileSync(new URL('HoloMotionPolicy.js', pluginDir), 'utf-8');
+
+  assert.equal(manifest.policy_id, 'holomotion_motion_tracking');
+  assert.equal(manifest.runtime, 'browser');
+  assert.equal(manifest.framework, 'custom_js');
+  assert.equal(manifest.module_path, './HoloMotionPolicy.js');
+  assert.equal(manifest.config_path, '/policy-plugins/holomotion/holomotion_policy_config.json');
+  assert.equal(manifest.format_id, 'holomotion');
+  assert.equal(config.onnx.path, './model.onnx');
+  assert.deepEqual(config.onnx.meta.in_keys, ['obs', 'past_key_values', 'step_idx']);
+  assert.deepEqual(config.onnx.meta.out_keys, ['actions', 'present_key_values']);
+  assert.equal(config.policy_joint_names.length, 29);
+  assert.equal(config.default_joint_pos.length, 29);
+  assert.equal(config.action_scale.length, 29);
+  assert.equal(config.holomotion.n_fut_frames, 10);
+  assert.equal(config.holomotion.keybody_names.length, 8);
+  assert.equal(
+    config.holomotion.obs_terms.includes('actor_ref_keybody_rel_pos_cur'),
+    false
+  );
+  assert.equal(existsSync(new URL('model.onnx', pluginDir)), true);
+  assert.match(moduleSource, /export async function createBrowserPolicy/);
+  assert.match(moduleSource, /class HoloMotionBrowserPolicy/);
+});
+
+test('HoloMotion v1.3 browser plugin is registered beside v1.2 with local model metadata', () => {
+  const pluginDir = new URL('../../../policy_plugins/holomotion_v13/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('policy.json', pluginDir), 'utf-8'));
+  const config = JSON.parse(readFileSync(new URL('holomotion_v13_policy_config.json', pluginDir), 'utf-8'));
+  const moduleSource = readFileSync(new URL('HoloMotionV13Policy.js', pluginDir), 'utf-8');
+
+  assert.equal(manifest.policy_id, 'holomotion_v13_motion_tracking');
+  assert.equal(manifest.runtime, 'browser');
+  assert.equal(manifest.framework, 'custom_js');
+  assert.equal(manifest.module_path, './HoloMotionV13Policy.js');
+  assert.equal(manifest.config_path, '/policy-plugins/holomotion_v13/holomotion_v13_policy_config.json');
+  assert.equal(manifest.format_id, 'holomotion_v13');
+  assert.equal(config.onnx.path, './model.onnx');
+  assert.equal(config.holomotion.version, '1.3.0');
+  assert.equal(config.policy_joint_names.length, 29);
+  assert.equal(config.default_joint_pos.length, 29);
+  assert.equal(config.action_scale.length, 29);
+  assert.equal(config.holomotion.n_fut_frames, 10);
+  assert.equal(config.holomotion.obs_terms.includes('actor_ref_dof_pos_fut'), true);
+  assert.match(moduleSource, /from ['"`]\.\.\/holomotion\/HoloMotionPolicy\.js\?g1_holomotion_base=/);
+  assert.match(moduleSource, /export async function createBrowserPolicy/);
+  assert.match(moduleSource, /class HoloMotionV13BrowserPolicy/);
+});
+
+test('Humanoid-GPT browser plugin is registered as a backend-assisted custom JS policy', () => {
+  const pluginDir = new URL('../../../policy_plugins/humanoid_gpt/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('policy.json', pluginDir), 'utf-8'));
+  const config = JSON.parse(readFileSync(new URL('humanoid_gpt_policy_config.json', pluginDir), 'utf-8'));
+  const moduleSource = readFileSync(new URL('HumanoidGPTPolicy.js', pluginDir), 'utf-8');
+
+  assert.equal(manifest.policy_id, 'humanoid_gpt_motion_tracking');
+  assert.equal(manifest.runtime, 'browser');
+  assert.equal(manifest.framework, 'custom_js');
+  assert.equal(manifest.module_path, './HumanoidGPTPolicy.js');
+  assert.equal(manifest.config_path, '/policy-plugins/humanoid_gpt/humanoid_gpt_policy_config.json');
+  assert.equal(manifest.format_id, 'humanoid_gpt');
+  assert.equal(config.onnx.path, './model.onnx');
+  assert.deepEqual(config.onnx.meta.in_keys, ['obs']);
+  assert.ok(config.onnx.meta.out_keys.includes('continuous_actions'));
+  assert.equal(config.onnx.meta.input_shapes.obs[1], 136);
+  assert.equal(config.policy_joint_names.length, 29);
+  assert.equal(config.default_joint_pos.length, 29);
+  assert.equal(config.action_scale.length, 29);
+  assert.equal(config.humanoid_gpt.obs_dim, 136);
+  assert.match(moduleSource, /from ['"`]\.\.\/holomotion\/HoloMotionPolicy\.js\?g1_humanoid_gpt_base=/);
+  assert.match(moduleSource, /export async function createBrowserPolicy/);
+  assert.match(moduleSource, /class HumanoidGPTBrowserPolicy/);
+});
+
+test('HoloMotion v1.3 step keeps transformer KV cache on the backend', async () => {
+  const capturedRequests = [];
+  const policy = await createHoloMotionV13BrowserPolicy(
+    { policy_id: 'holomotion_v13_motion_tracking', config_path: '/policy-plugins/holomotion_v13/holomotion_v13_policy_config.json' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a', 'joint_b'],
+        default_joint_pos: [0.5, -0.5],
+        reset_joint_pos: [0.5, -0.5],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [0.1, 0.2],
+        stiffness: [10, 20],
+        damping: [1, 2],
+        torque_limits: [30, 40],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          version: '1.3.0',
+          n_fut_frames: 0,
+          keybody_names: [],
+          body_names: ['pelvis'],
+          obs_terms: ['actor_dof_pos', 'actor_last_action']
+        },
+        onnx: {
+          path: './model.onnx',
+          meta: {
+            in_keys: ['obs_tokens', 'past_key_values', 'current_pos'],
+            out_keys: ['actions_out', 'present_key_values'],
+            input_shapes: {
+              obs_tokens: [1, 6],
+              past_key_values: [1, 2, 1, 4],
+              current_pos: [1]
+            },
+            kv_dtype: 'float32'
+          }
+        }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion_v13/model.onnx',
+      ort: {
+        InferenceSession: {
+          async create() {
+            throw new Error('HoloMotion v1.3 should use backend inference, not ORT Web.');
+          }
+        }
+      },
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+
+  await withMockedFetch(async (url, options = {}) => {
+    assert.equal(url, '/api/holomotion-v13/infer');
+    const payload = JSON.parse(options.body);
+    capturedRequests.push(payload);
+    return {
+      ok: true,
+      json: async () => ({
+        actions: [1, -1],
+        cache_id: payload.cache_id,
+        present_key_values_shape: [1, 2, 1, 4]
+      })
+    };
+  }, async () => {
+    await policy.load();
+    const first = await policy.step({
+      current_state: {
+        joint_names: ['joint_a', 'joint_b'],
+        state: {
+          joint_positions: [0.6, -0.7],
+          joint_velocities: [0, 0],
+          root_translation: [0, 0, 0.78],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_angular_velocity: [0, 0, 0]
+        }
+      }
+    });
+    const second = await policy.step({
+      current_state: {
+        joint_names: ['joint_a', 'joint_b'],
+        state: {
+          joint_positions: [0.6, -0.7],
+          joint_velocities: [0, 0],
+          root_translation: [0, 0, 0.78],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_angular_velocity: [0, 0, 0]
+        }
+      }
+    });
+
+    assert.deepEqual(first.joint_positions.map((value) => Number(value.toFixed(6))), [0.6, -0.7]);
+    assert.deepEqual(second.joint_positions.map((value) => Number(value.toFixed(6))), [0.6, -0.7]);
+    assert.deepEqual(capturedRequests[0].obs.map((value) => Number(value.toFixed(6))), [0.1, -0.2, 0, 0]);
+    assert.equal(typeof capturedRequests[0].cache_id, 'string');
+    assert.ok(capturedRequests[0].cache_id.length > 0);
+    assert.equal(capturedRequests[0].reset_cache, true);
+    assert.equal(capturedRequests[0].past_key_values, null);
+    assert.deepEqual(capturedRequests[0].past_key_values_shape, [1, 2, 1, 4]);
+    assert.equal(capturedRequests[0].step_idx, 0);
+    assert.equal(capturedRequests[1].cache_id, capturedRequests[0].cache_id);
+    assert.equal(capturedRequests[1].reset_cache, false);
+    assert.equal(capturedRequests[1].past_key_values, null);
+    assert.equal(capturedRequests[1].step_idx, 1);
+  });
+});
+
+test('Humanoid-GPT step calls backend inference with current and reference frames', async () => {
+  const capturedRequests = [];
+  const policy = await createHumanoidGPTBrowserPolicy(
+    { policy_id: 'humanoid_gpt_motion_tracking', config_path: '/policy-plugins/humanoid_gpt/humanoid_gpt_policy_config.json' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a', 'joint_b'],
+        default_joint_pos: [0.5, -0.5],
+        reset_joint_pos: [0.5, -0.5],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [0.1, 0.2],
+        stiffness: [10, 20],
+        damping: [1, 2],
+        torque_limits: [30, 40],
+        control_dt: 0.02,
+        action_clip: 1,
+        humanoid_gpt: {
+          obs_dim: 136,
+          source_repo: 'GalaxyGeneralRobotics/Humanoid-GPT'
+        },
+        onnx: {
+          path: './model.onnx',
+          meta: {
+            in_keys: ['obs'],
+            out_keys: ['continuous_actions'],
+            input_shapes: { obs: [1, 136] },
+            output_shapes: { continuous_actions: [1, 2] }
+          }
+        }
+      }),
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+
+  await withMockedFetch(async (url, options = {}) => {
+    assert.equal(url, '/api/humanoid-gpt/infer');
+    const payload = JSON.parse(options.body);
+    capturedRequests.push(payload);
+    return {
+      ok: true,
+      json: async () => ({
+        actions: [0.25, -0.5],
+        joint_positions: [0.7, -0.9],
+        cache_id: payload.cache_id,
+        input_names: ['obs'],
+        output_names: ['continuous_actions']
+      })
+    };
+  }, async () => {
+    await policy.load();
+    assert.equal(policy.setMotionClip('active_clip', {
+      frames: [
+        {
+          joint_positions: [0.1, -0.1],
+          joint_velocities: [0.01, -0.01],
+          root_translation: [0, 0, 0.78],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_linear_velocity: [0, 0, 0],
+          root_angular_velocity: [0, 0, 0]
+        },
+        {
+          joint_positions: [0.2, -0.2],
+          joint_velocities: [0.02, -0.02],
+          root_translation: [0.1, 0, 0.78],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_linear_velocity: [0.1, 0, 0],
+          root_angular_velocity: [0, 0, 0.1]
+        }
+      ]
+    }), true);
+    assert.equal(policy.requestMotion('active_clip', null, { startFrame: 0, transitionSteps: 0 }), true);
+
+    const currentState = {
+      joint_names: ['joint_a', 'joint_b'],
+      state: {
+        joint_positions: [0.6, -0.7],
+        joint_velocities: [0.03, -0.04],
+        root_translation: [0, 0, 0.78],
+        root_rotation_wxyz: [1, 0, 0, 0],
+        root_linear_velocity: [0, 0, 0],
+        root_angular_velocity: [0, 0, 0.2]
+      }
+    };
+
+    const first = await policy.step({ current_state: currentState });
+    const second = await policy.step({ current_state: currentState });
+
+    assert.deepEqual(first.joint_positions, [0.7, -0.9]);
+    assert.deepEqual(second.joint_positions, [0.7, -0.9]);
+    assert.equal(capturedRequests[0].reset_cache, true);
+    assert.equal(capturedRequests[1].reset_cache, false);
+    assert.equal(capturedRequests[1].cache_id, capturedRequests[0].cache_id);
+    assert.deepEqual(capturedRequests[0].current_state.state.joint_positions, [0.6, -0.7]);
+    assert.deepEqual(capturedRequests[0].ref_curr.state.joint_positions, [0.1, -0.1]);
+    assert.deepEqual(capturedRequests[0].ref_next.state.root_translation, [0.1, 0, 0.78]);
+
+    assert.equal(policy.requestMotion('active_clip', null, { startFrame: 0, transitionSteps: 0 }), true);
+    await policy.step({ current_state: currentState });
+    assert.equal(capturedRequests[2].reset_cache, true);
+  });
+});
+
+test('HoloMotion v1.3 step runs single-input models without KV feeds', async () => {
+  let capturedRequest = null;
+  const policy = await createHoloMotionV13BrowserPolicy(
+    { policy_id: 'holomotion_v13_motion_tracking', config_path: '/policy-plugins/holomotion_v13/holomotion_v13_policy_config.json' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a'],
+        default_joint_pos: [0],
+        reset_joint_pos: [0],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [0.5],
+        stiffness: [10],
+        damping: [1],
+        torque_limits: [30],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          version: '1.3.0',
+          n_fut_frames: 0,
+          keybody_names: [],
+          body_names: ['pelvis'],
+          obs_terms: ['actor_dof_pos']
+        },
+        onnx: {
+          path: './model.onnx',
+          meta: {
+            in_keys: ['policy_obs'],
+            out_keys: ['policy_actions'],
+            input_shapes: { policy_obs: [1, 1] }
+          }
+        }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion_v13/model.onnx',
+      ort: {
+        InferenceSession: {
+          async create() {
+            throw new Error('HoloMotion v1.3 should use backend inference, not ORT Web.');
+          }
+        }
+      },
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+
+  await withMockedFetch(async (url, options = {}) => {
+    assert.equal(url, '/api/holomotion-v13/infer');
+    capturedRequest = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({ actions: [2] })
+    };
+  }, async () => {
+    await policy.load();
+    const output = await policy.step({
+      current_state: {
+        joint_names: ['joint_a'],
+        state: {
+          joint_positions: [0.25],
+          joint_velocities: [0],
+          root_translation: [0, 0, 0.78],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_angular_velocity: [0, 0, 0]
+        }
+      }
+    });
+
+    assert.deepEqual(capturedRequest.obs.map((value) => Number(value.toFixed(6))), [0.25]);
+    assert.equal(capturedRequest.past_key_values, null);
+    assert.equal(capturedRequest.past_key_values_shape, null);
+    assert.equal(capturedRequest.step_idx, 0);
+    assert.deepEqual(output.joint_positions, [0.5]);
+  });
+});
+
+test('HoloMotion observation follows deployment term order and future reference layout', async () => {
+  const policy = await createHoloMotionBrowserPolicy(
+    { policy_id: 'holomotion_motion_tracking' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a', 'joint_b'],
+        default_joint_pos: [0.5, -0.5],
+        reset_joint_pos: [0.5, -0.5],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [0.1, 0.2],
+        stiffness: [10, 20],
+        damping: [1, 2],
+        torque_limits: [30, 40],
+        control_dt: 0.02,
+        action_clip: 10,
+        holomotion: {
+          n_fut_frames: 2,
+          keybody_names: ['body_a'],
+          body_names: ['pelvis', 'body_a'],
+          obs_terms: [
+            'actor_ref_gravity_projection_cur',
+            'actor_ref_base_linvel_cur',
+            'actor_ref_base_angvel_cur',
+            'actor_ref_dof_pos_cur',
+            'actor_ref_root_height_cur',
+            'actor_projected_gravity',
+            'actor_rel_robot_root_ang_vel',
+            'actor_dof_pos',
+            'actor_dof_vel',
+            'actor_last_action',
+            'actor_ref_dof_pos_fut',
+            'actor_ref_root_height_fut',
+            'actor_ref_gravity_projection_fut',
+            'actor_ref_base_linvel_fut',
+            'actor_ref_base_angvel_fut'
+          ]
+        },
+        onnx: { path: './model.onnx', meta: { in_keys: ['obs'], out_keys: ['actions'] } }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion/model.onnx',
+      ort: {
+        Tensor: class Tensor {
+          constructor(type, data, dims) {
+            this.type = type;
+            this.data = data;
+            this.dims = dims;
+          }
+        },
+        InferenceSession: {
+          async create() {
+            return {
+              inputNames: ['obs'],
+              outputNames: ['actions'],
+              async run() {
+                return { actions: { data: new Float32Array([0, 0]) } };
+              }
+            };
+          }
+        }
+      },
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+  await withMockedFetch(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }), async () => {
+    await policy.load();
+    policy.setMotionClip('active_clip', {
+      body_names: ['pelvis', 'body_a'],
+      frames: [
+        {
+          joint_positions: [1, 2],
+          joint_velocities: [0.1, 0.2],
+          root_translation: [0, 0, 1],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_linear_velocity: [3, 4, 5],
+          root_angular_velocity: [6, 7, 8],
+          body_positions: [[0, 0, 1], [1, 0, 1]],
+          body_rotations_wxyz: [[1, 0, 0, 0], [1, 0, 0, 0]],
+          body_linear_velocities: [[3, 4, 5], [9, 9, 9]],
+          body_angular_velocities: [[6, 7, 8], [8, 8, 8]]
+        },
+        {
+          joint_positions: [3, 4],
+          joint_velocities: [0.3, 0.4],
+          root_translation: [0, 0, 2],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_linear_velocity: [9, 10, 11],
+          root_angular_velocity: [12, 13, 14],
+          body_positions: [[0, 0, 2], [0, 2, 2]],
+          body_rotations_wxyz: [[1, 0, 0, 0], [1, 0, 0, 0]],
+          body_linear_velocities: [[9, 10, 11], [7, 7, 7]],
+          body_angular_velocities: [[12, 13, 14], [6, 6, 6]]
+        }
+      ]
+    });
+    policy.requestMotion('active_clip', null, { transitionSteps: 0 });
+
+    const obs = policy._buildObservation({
+      jointPos: Float32Array.from([0.25, -0.75]),
+      jointVel: Float32Array.from([0.5, -0.5]),
+      rootQuat: Float32Array.from([1, 0, 0, 0]),
+      rootAngVel: Float32Array.from([1.5, 2.5, 3.5])
+    });
+
+    assert.deepEqual(Array.from(obs.slice(0, 3)), [0, 0, -1]);
+    assert.deepEqual(Array.from(obs.slice(3, 6)), [3, 4, 5]);
+    assert.deepEqual(Array.from(obs.slice(6, 9)), [6, 7, 8]);
+    assert.deepEqual(Array.from(obs.slice(9, 11)), [1, 2]);
+    assert.equal(obs[11], 1);
+    assert.deepEqual(Array.from(obs.slice(12, 15)), [0, 0, -1]);
+    assert.deepEqual(Array.from(obs.slice(15, 18)), [1.5, 2.5, 3.5]);
+    assert.deepEqual(Array.from(obs.slice(18, 20)), [-0.25, -0.25]);
+    assert.deepEqual(Array.from(obs.slice(20, 22)), [0.5, -0.5]);
+    assert.deepEqual(Array.from(obs.slice(22, 24)), [0, 0]);
+    assert.deepEqual(Array.from(obs.slice(24, 28)), [3, 4, 3, 4]);
+    assert.deepEqual(Array.from(obs.slice(28, 30)), [2, 2]);
+    assert.deepEqual(Array.from(obs.slice(30, 36)), [0, 0, -1, 0, 0, -1]);
+    assert.deepEqual(Array.from(obs.slice(36, 42)), [9, 10, 11, 9, 10, 11]);
+    assert.deepEqual(Array.from(obs.slice(42, 48)), [12, 13, 14, 12, 13, 14]);
+  });
+});
+
+test('HoloMotion actor_rel_robot_root_ang_vel rotates world-frame angular velocity to root frame', async () => {
+  const policy = await createHoloMotionBrowserPolicy(
+    { policy_id: 'holomotion_motion_tracking' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a'],
+        default_joint_pos: [0],
+        reset_joint_pos: [0],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [1],
+        stiffness: [10],
+        damping: [1],
+        torque_limits: [30],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          n_fut_frames: 0,
+          keybody_names: [],
+          body_names: ['pelvis'],
+          obs_terms: ['actor_rel_robot_root_ang_vel']
+        },
+        onnx: { path: './model.onnx', meta: { in_keys: ['obs'], out_keys: ['actions'] } }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion/model.onnx',
+      ort: {
+        Tensor: class Tensor {
+          constructor(type, data, dims) { this.type = type; this.data = data; this.dims = dims; }
+        },
+        InferenceSession: {
+          async create() {
+            return { inputNames: ['obs'], outputNames: ['actions'], async run() { return { actions: { data: new Float32Array([0]) } }; } };
+          }
+        }
+      },
+      clonePhysicsOptions(options) { return options ? JSON.parse(JSON.stringify(options)) : null; }
+    }
+  );
+  await withMockedFetch(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }), async () => {
+    await policy.load();
+    // 90-degree yaw rotation: wxyz = [cos(45°), 0, 0, sin(45°)]
+    const sq2 = Math.SQRT2 / 2;
+    const obs = policy._buildObservation({
+      jointPos: Float32Array.from([0]),
+      jointVel: Float32Array.from([0]),
+      rootQuat: Float32Array.from([sq2, 0, 0, sq2]),
+      rootAngVel: Float32Array.from([1, 0, 0])
+    });
+    // 90-degree yaw: quatApplyInv([sq2,0,0,sq2], [1,0,0]) = [0, -1, 0] (world x → root -y)
+    assert.ok(Math.abs(obs[0]) < 1e-5, `obs[0] should be ~0, got ${obs[0]}`);
+    assert.ok(Math.abs(obs[1] + 1) < 1e-5, `obs[1] should be ~-1, got ${obs[1]}`);
+    assert.ok(Math.abs(obs[2]) < 1e-5, `obs[2] should be ~0, got ${obs[2]}`);
+  });
+});
+
+test('HoloMotion motion clips remap frame cache joints into policy order', async () => {
+  const policy = await createHoloMotionBrowserPolicy(
+    { policy_id: 'holomotion_motion_tracking' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_b', 'joint_a'],
+        default_joint_pos: [-0.5, 0.5],
+        reset_joint_pos: [-0.5, 0.5],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [0.1, 0.2],
+        stiffness: [10, 20],
+        damping: [1, 2],
+        torque_limits: [30, 40],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          n_fut_frames: 1,
+          keybody_names: [],
+          body_names: ['pelvis'],
+          obs_terms: ['actor_ref_dof_pos_cur', 'actor_ref_dof_pos_fut']
+        },
+        onnx: { path: './model.onnx', meta: { in_keys: ['obs'], out_keys: ['actions'] } }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion/model.onnx',
+      ort: {
+        Tensor: class Tensor {
+          constructor(type, data, dims) {
+            this.type = type;
+            this.data = data;
+            this.dims = dims;
+          }
+        },
+        InferenceSession: {
+          async create() {
+            return {
+              inputNames: ['obs'],
+              outputNames: ['actions'],
+              async run() {
+                return { actions: { data: new Float32Array([0, 0]) } };
+              }
+            };
+          }
+        }
+      },
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+
+  await withMockedFetch(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }), async () => {
+    await policy.load();
+    policy.setMotionClip('active_clip', {
+      joint_names: ['joint_a', 'joint_b'],
+      body_names: ['pelvis'],
+      frames: [
+        {
+          joint_positions: [1, 2],
+          joint_velocities: [0.1, 0.2],
+          root_translation: [0, 0, 1],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          body_positions: [[0, 0, 1]],
+          body_rotations_wxyz: [[1, 0, 0, 0]]
+        },
+        {
+          joint_positions: [3, 4],
+          joint_velocities: [0.3, 0.4],
+          root_translation: [0, 0, 1],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          body_positions: [[0, 0, 1]],
+          body_rotations_wxyz: [[1, 0, 0, 0]]
+        }
+      ]
+    });
+    policy.requestMotion('active_clip', null, { transitionSteps: 0 });
+
+    const obs = policy._buildObservation({
+      jointPos: Float32Array.from([0, 0]),
+      jointVel: Float32Array.from([0, 0]),
+      rootQuat: Float32Array.from([1, 0, 0, 0]),
+      rootAngVel: Float32Array.from([0, 0, 0])
+    });
+
+    assert.deepEqual(Array.from(obs), [2, 1, 4, 3]);
+  });
+});
+
+test('HoloMotion tracking honors requested start frame and yaw-aligns reference velocities', async () => {
+  const policy = await createHoloMotionBrowserPolicy(
+    { policy_id: 'holomotion_motion_tracking' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a'],
+        default_joint_pos: [0],
+        reset_joint_pos: [0],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [1],
+        stiffness: [10],
+        damping: [1],
+        torque_limits: [30],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          n_fut_frames: 1,
+          keybody_names: [],
+          body_names: ['pelvis', 'body_a'],
+          obs_terms: ['actor_ref_dof_pos_cur', 'actor_ref_base_linvel_cur', 'actor_ref_base_linvel_fut']
+        },
+        onnx: { path: './model.onnx', meta: { in_keys: ['obs'], out_keys: ['actions'] } }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion/model.onnx',
+      ort: {
+        Tensor: class Tensor {
+          constructor(type, data, dims) {
+            this.type = type;
+            this.data = data;
+            this.dims = dims;
+          }
+        },
+        InferenceSession: {
+          async create() {
+            return {
+              inputNames: ['obs'],
+              outputNames: ['actions'],
+              async run() {
+                return { actions: { data: new Float32Array([0]) } };
+              }
+            };
+          }
+        }
+      },
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+
+  await withMockedFetch(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }), async () => {
+    await policy.load();
+    policy.setMotionClip('active_clip', {
+      joint_names: ['joint_a'],
+      body_names: ['pelvis', 'body_a'],
+      frames: [0, 1, 2].map((index) => ({
+        joint_positions: [index],
+        joint_velocities: [0],
+        root_translation: [index, 0, 1],
+        root_rotation_wxyz: [1, 0, 0, 0],
+        root_linear_velocity: [1, 0, 0],
+        root_angular_velocity: [0, 0, 0],
+        body_positions: [[index, 0, 1], [index + 1, 0, 1]],
+        body_rotations_wxyz: [[1, 0, 0, 0], [1, 0, 0, 0]],
+        body_linear_velocities: [[1, 0, 0], [1, 0, 0]],
+        body_angular_velocities: [[0, 0, 0], [0, 0, 0]]
+      }))
+    });
+    const halfTurn = [0, 0, 0, 1];
+    policy.requestMotion(
+      'active_clip',
+      {
+        joint_names: ['joint_a'],
+        state: {
+          joint_positions: [0],
+          joint_velocities: [0],
+          root_translation: [10, 0, 1],
+          root_rotation_wxyz: halfTurn,
+          root_angular_velocity: [0, 0, 0]
+        }
+      },
+      { startFrame: 1, transitionSteps: 0 }
+    );
+
+    const obs = policy._buildObservation({
+      jointPos: Float32Array.from([0]),
+      jointVel: Float32Array.from([0]),
+      rootQuat: Float32Array.from([1, 0, 0, 0]),
+      rootAngVel: Float32Array.from([0, 0, 0])
+    });
+
+    assert.deepEqual(Array.from(obs.slice(0, 1)), [1]);
+    assert.deepEqual(Array.from(obs.slice(1, 4)).map(roundZeros), [1, 0, 0]);
+    assert.deepEqual(Array.from(obs.slice(4, 7)).map(roundZeros), [1, 0, 0]);
+    assert.deepEqual(Array.from(policy.tracking.frame().rootPos).map(roundZeros), [10, 0, 1]);
+  });
+});
+
+test('HoloMotion derives reference base velocities from root trajectory when frame cache omits velocities', async () => {
+  const policy = await createHoloMotionBrowserPolicy(
+    { policy_id: 'holomotion_motion_tracking' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a'],
+        default_joint_pos: [0],
+        reset_joint_pos: [0],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [1],
+        stiffness: [10],
+        damping: [1],
+        torque_limits: [30],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          n_fut_frames: 1,
+          keybody_names: [],
+          body_names: ['pelvis'],
+          obs_terms: ['actor_ref_base_linvel_cur', 'actor_ref_base_linvel_fut']
+        },
+        onnx: { path: './model.onnx', meta: { in_keys: ['obs'], out_keys: ['actions'] } }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion/model.onnx',
+      ort: {
+        Tensor: class Tensor {
+          constructor(type, data, dims) {
+            this.type = type;
+            this.data = data;
+            this.dims = dims;
+          }
+        },
+        InferenceSession: {
+          async create() {
+            return {
+              inputNames: ['obs'],
+              outputNames: ['actions'],
+              async run() {
+                return { actions: { data: new Float32Array([0]) } };
+              }
+            };
+          }
+        }
+      },
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+
+  await withMockedFetch(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }), async () => {
+    await policy.load();
+    policy.setMotionClip('active_clip', {
+      fps: 50,
+      joint_names: ['joint_a'],
+      body_names: ['pelvis'],
+      frames: [0, 1, 2].map((frame) => ({
+        joint_positions: [0],
+        joint_velocities: [0],
+        root_translation: [frame * 0.02, 0, 1],
+        root_rotation_wxyz: [1, 0, 0, 0],
+        root_linear_velocity: [0, 0, 0],
+        root_angular_velocity: [0, 0, 0],
+        body_positions: [[frame * 0.02, 0, 1]],
+        body_rotations_wxyz: [[1, 0, 0, 0]],
+        body_linear_velocities: [[0, 0, 0]],
+        body_angular_velocities: [[0, 0, 0]]
+      }))
+    });
+    policy.requestMotion('active_clip', null, { startFrame: 0, transitionSteps: 0 });
+
+    const obs = policy._buildObservation({
+      jointPos: Float32Array.from([0]),
+      jointVel: Float32Array.from([0]),
+      rootQuat: Float32Array.from([1, 0, 0, 0]),
+      rootAngVel: Float32Array.from([0, 0, 0])
+    });
+
+    assert.deepEqual(Array.from(obs).map(roundZeros), [1, 0, 0, 1, 0, 0]);
+  });
+});
+
+test('HoloMotion step applies action scale and default pose in policy joint order', async () => {
+  let capturedFeeds = null;
+  const policy = await createHoloMotionBrowserPolicy(
+    { policy_id: 'holomotion_motion_tracking' },
+    {
+      loadPolicyConfig: async () => ({
+        policy_joint_names: ['joint_a', 'joint_b'],
+        default_joint_pos: [0.5, -0.5],
+        reset_joint_pos: [0.5, -0.5],
+        reset_root_translation: [0, 0, 0.78],
+        action_scale: [0.1, 0.2],
+        stiffness: [10, 20],
+        damping: [1, 2],
+        torque_limits: [30, 40],
+        control_dt: 0.02,
+        action_clip: 1,
+        holomotion: {
+          n_fut_frames: 1,
+          keybody_names: [],
+          body_names: ['pelvis'],
+          obs_terms: ['actor_dof_pos', 'actor_last_action']
+        },
+        onnx: { path: './model.onnx', meta: { in_keys: ['obs'], out_keys: ['actions'] } }
+      }),
+      resolveStaticAssetPath: () => '/policy-plugins/holomotion/model.onnx',
+      ort: {
+        Tensor: class Tensor {
+          constructor(type, data, dims) {
+            this.type = type;
+            this.data = data;
+            this.dims = dims;
+          }
+        },
+        InferenceSession: {
+          async create() {
+            return {
+              inputNames: ['obs'],
+              outputNames: ['actions'],
+              async run(feeds) {
+                capturedFeeds = feeds;
+                return { actions: { data: new Float32Array([2, -0.5]) } };
+              }
+            };
+          }
+        }
+      },
+      clonePhysicsOptions(options) {
+        return options ? JSON.parse(JSON.stringify(options)) : null;
+      }
+    }
+  );
+  await withMockedFetch(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }), async () => {
+    await policy.load();
+
+    const output = await policy.step({
+      current_state: {
+        joint_names: ['joint_a', 'joint_b'],
+        state: {
+          joint_positions: [0.6, -0.8],
+          joint_velocities: [0.1, -0.1],
+          root_translation: [0, 0, 0.78],
+          root_rotation_wxyz: [1, 0, 0, 0],
+          root_angular_velocity: [0, 0, 0]
+        }
+      }
+    });
+
+    assert.equal(capturedFeeds.obs.dims[0], 1);
+    assert.deepEqual(output.joint_names, ['joint_a', 'joint_b']);
+    assert.deepEqual(output.joint_positions.map((value) => Number(value.toFixed(6))), [0.6, -0.6]);
+    assert.deepEqual(output.kp, [10, 20]);
+    assert.deepEqual(output.kd, [1, 2]);
+    assert.deepEqual(output.torque_limits, [30, 40]);
+    assert.equal(output.control_dt, 0.02);
+  });
 });
 
 test('SONIC encoder input keeps deployment observation offsets for g1 motion tokens', async () => {
@@ -177,6 +1092,133 @@ test('SONIC encoder input keeps deployment observation offsets for g1 motion tok
   assert.deepEqual(Array.from(input.slice(601, 607)), [1, 0, 0, 1, 0, 0]);
   assert.deepEqual(Array.from(input.slice(661, 673)), new Array(12).fill(0));
   assert.deepEqual(Array.from(input.slice(793, 1762)), new Array(969).fill(0));
+});
+
+test('SONIC motion clip remaps frame cache joint names before encoder order conversion', async () => {
+  const policy = await createSonicBrowserPolicy(
+    { policy_id: 'sonic' },
+    {
+      math: {
+        quatToRot6d,
+        quatApplyInv() {
+          return [0, 0, -1];
+        }
+      }
+    }
+  );
+  const sourceJointNames = policy.policyJointNames.slice().reverse();
+  const frames = Array.from({ length: 60 }, (_, frame) => ({
+    joint_positions: sourceJointNames.map((name) => (
+      1000 + frame * 100 + policy.policyJointNames.indexOf(name)
+    )),
+    joint_velocities: sourceJointNames.map((name) => (
+      2000 + frame * 100 + policy.policyJointNames.indexOf(name)
+    )),
+    root_translation: [0, 0, 0.78],
+    root_rotation_wxyz: [1, 0, 0, 0]
+  }));
+
+  assert.equal(policy.setMotionClip('remapped_clip', { jointNames: sourceJointNames, frames }), true);
+  assert.equal(policy.requestMotion('remapped_clip', null, { startFrame: 0, transitionSteps: 0 }), true);
+
+  const input = policy._buildEncoderInput();
+
+  assert.equal(input[4], 1000);
+  assert.equal(input[4 + 1], 1006);
+  assert.equal(input[4 + 2], 1012);
+  assert.equal(input[294], 2000);
+  assert.equal(input[294 + 1], 2006);
+  assert.equal(input[294 + 2], 2012);
+});
+
+test('SONIC motion clip derives encoder joint velocities from zero placeholders', async () => {
+  const policy = await createSonicBrowserPolicy(
+    { policy_id: 'sonic' },
+    {
+      math: {
+        quatToRot6d,
+        quatApplyInv() {
+          return [0, 0, -1];
+        }
+      }
+    }
+  );
+  const frames = Array.from({ length: 60 }, (_, frame) => ({
+    joint_positions: Array.from({ length: 29 }, (_, joint) => frame * 2 + joint),
+    joint_velocities: Array.from({ length: 29 }, () => 0),
+    root_translation: [0, 0, 0.78],
+    root_rotation_wxyz: [1, 0, 0, 0]
+  }));
+
+  assert.equal(policy.setMotionClip('estimated_velocity_clip', { fps: 10, frames }), true);
+  assert.equal(policy.requestMotion('estimated_velocity_clip', null, { startFrame: 0, transitionSteps: 0 }), true);
+
+  const input = policy._buildEncoderInput();
+
+  assert.equal(input[294], 20);
+  assert.equal(input[294 + 1], 20);
+  assert.equal(input[294 + 2], 20);
+  assert.equal(input[294 + 29], 20);
+  assert.equal(input[294 + 29 + 1], 20);
+  assert.equal(input[294 + 29 + 2], 20);
+});
+
+test('SONIC motion clip derives encoder joint velocities from incomplete placeholders', async () => {
+  const policy = await createSonicBrowserPolicy(
+    { policy_id: 'sonic' },
+    {
+      math: {
+        quatToRot6d,
+        quatApplyInv() {
+          return [0, 0, -1];
+        }
+      }
+    }
+  );
+  const frames = Array.from({ length: 60 }, (_, frame) => ({
+    joint_positions: Array.from({ length: 29 }, (_, joint) => frame * 3 + joint),
+    joint_velocities: [123],
+    root_translation: [0, 0, 0.78],
+    root_rotation_wxyz: [1, 0, 0, 0]
+  }));
+
+  assert.equal(policy.setMotionClip('incomplete_velocity_clip', { fps: 10, frames }), true);
+  assert.equal(policy.requestMotion('incomplete_velocity_clip', null, { startFrame: 0, transitionSteps: 0 }), true);
+
+  const input = policy._buildEncoderInput();
+
+  assert.equal(input[294], 30);
+  assert.equal(input[294 + 1], 30);
+  assert.equal(input[294 + 2], 30);
+});
+
+test('SONIC motion clip keeps provided nonzero encoder joint velocities', async () => {
+  const policy = await createSonicBrowserPolicy(
+    { policy_id: 'sonic' },
+    {
+      math: {
+        quatToRot6d,
+        quatApplyInv() {
+          return [0, 0, -1];
+        }
+      }
+    }
+  );
+  const frames = Array.from({ length: 60 }, (_, frame) => ({
+    joint_positions: Array.from({ length: 29 }, (_, joint) => frame * 100 + joint),
+    joint_velocities: Array.from({ length: 29 }, (_, joint) => 5000 + frame * 100 + joint),
+    root_translation: [0, 0, 0.78],
+    root_rotation_wxyz: [1, 0, 0, 0]
+  }));
+
+  assert.equal(policy.setMotionClip('provided_velocity_clip', { fps: 10, frames }), true);
+  assert.equal(policy.requestMotion('provided_velocity_clip', null, { startFrame: 0, transitionSteps: 0 }), true);
+
+  const input = policy._buildEncoderInput();
+
+  assert.equal(input[294], 5000);
+  assert.equal(input[294 + 1], 5006);
+  assert.equal(input[294 + 2], 5012);
 });
 
 test('SONIC encoder anchor orientation uses deployment heading alignment', async () => {
@@ -401,6 +1443,54 @@ test('SONIC step outputs the anchored tracking root pose', async () => {
   assert.deepEqual(output.root_translation.map((value) => Number(value.toFixed(6))), [3, 4, 0.79]);
 });
 
+test('SONIC tracking reports a static suffix before active clip completion', async () => {
+  const policy = await createSonicBrowserPolicy(
+    { policy_id: 'sonic' },
+    {
+      math: {
+        quatApplyInv() {
+          return [0, 0, -1];
+        }
+      }
+    }
+  );
+  policy.motionStep = 1;
+  const movingFrames = Array.from({ length: 3 }, (_, frame) => ({
+    joint_positions: Array.from({ length: 29 }, () => frame * 0.1),
+    joint_velocities: Array.from({ length: 29 }, () => 0.5),
+    root_translation: [frame * 0.04, 0, 0.78],
+    root_rotation_wxyz: [1, 0, 0, 0]
+  }));
+  const standingFrame = {
+    joint_positions: Array.from({ length: 29 }, () => 0.3),
+    joint_velocities: Array.from({ length: 29 }, () => 0),
+    root_translation: [0.12, 0, 0.78],
+    root_rotation_wxyz: [1, 0, 0, 0]
+  };
+  const frames = [
+    ...movingFrames,
+    ...Array.from({ length: 16 }, () => ({
+      joint_positions: standingFrame.joint_positions.slice(),
+      joint_velocities: standingFrame.joint_velocities.slice(),
+      root_translation: standingFrame.root_translation.slice(),
+      root_rotation_wxyz: standingFrame.root_rotation_wxyz.slice()
+    }))
+  ];
+
+  assert.equal(policy.setMotionClip('active_clip', { frames }), true);
+  assert.equal(policy.requestMotion('active_clip', null, { startFrame: 0, transitionSteps: 0 }), true);
+
+  assert.equal(policy.tracking.playbackState().staticTail, false);
+  policy.tracking.advance();
+  policy.tracking.advance();
+  policy.tracking.advance();
+
+  const state = policy.tracking.playbackState();
+  assert.equal(state.staticTail, true);
+  assert.equal(state.staticTailStartFrame, 3);
+  assert.equal(state.currentDone, false);
+});
+
 test('SONIC decoder proprioception remaps MuJoCo joint state into deployment policy order', async () => {
   const policy = await createSonicBrowserPolicy(
     { policy_id: 'sonic' },
@@ -437,7 +1527,9 @@ test('bundled ONNX policy config keeps model assets relative to the policy plugi
   const config = JSON.parse(readFileSync(new URL('../../../policy_plugins/motion_tracking/tracking_policy_latest.json', import.meta.url), 'utf-8'));
 
   assert.equal(config.onnx.path, './policy_latest.onnx');
+  assert.deepEqual(config.onnx.meta.in_shapes, [[[1, 1590]]]);
   assert.equal(config.control_dt, 0.02);
+  assert.ok(config.obs_config.policy.some((entry) => entry.name === 'JointVel'));
   assert.doesNotMatch(config.onnx.path, /examples\/checkpoints/);
 });
 
@@ -469,6 +1561,53 @@ test('twist2 observation implementation lives inside the twist2 policy plugin fo
   assert.ok(existsSync(twist2Url));
   assert.equal(existsSync(oldFrontendUrl), false);
   assert.match(readFileSync(twist2Url, 'utf-8'), /export class Twist2StudentFutureObs/);
+});
+
+test('default motion tracking observation schema builds the 1590-dimensional deploy input', () => {
+  const config = JSON.parse(readFileSync(new URL('../../../policy_plugins/motion_tracking/tracking_policy_latest.json', import.meta.url), 'utf-8'));
+  const policy = new BrowserOnnxPolicy({ policy_id: 'motion_tracking' });
+  policy.config = config;
+  policy.policyJointNames = config.policy_joint_names.slice();
+  policy.numActions = policy.policyJointNames.length;
+  policy.defaultJointPos = new Float32Array(config.default_joint_pos);
+  policy.actionScale = new Float32Array(config.action_scale);
+  policy.stiffness = new Float32Array(config.stiffness);
+  policy.damping = new Float32Array(config.damping);
+  policy.torqueLimits = new Float32Array();
+  policy.lastActions = Float32Array.from(config.policy_joint_names.map((_, index) => 0.1 * (index + 1)));
+  policy.tracking = new TrackingHelper({
+    ...config.tracking,
+    policy_joint_names: policy.policyJointNames,
+    transition_steps: 0,
+    motions: {
+      default: makeTrackingClip(config.tracking.dataset_joint_names, 24)
+    }
+  });
+  policy.obsModules = policy._buildObsModules(config.obs_config);
+  policy.numObs = policy.obsModules.reduce((sum, obs) => sum + (obs.size ?? 0), 0);
+  policy.reset({
+    jointPos: Float32Array.from(config.default_joint_pos),
+    jointVel: Float32Array.from(config.policy_joint_names.map((_, index) => index + 1)),
+    rootPos: new Float32Array([0, 0, 0.78]),
+    rootQuat: new Float32Array([1, 0, 0, 0]),
+    rootAngVel: new Float32Array([1, 2, 3])
+  });
+
+  assert.equal(policy.tracking.requestMotion('default', null, { startFrame: 0, transitionSteps: 0 }), true);
+  const observation = policy._buildObservation({
+    jointPos: Float32Array.from(config.default_joint_pos.map((value) => value + 0.25)),
+    jointVel: Float32Array.from(config.policy_joint_names.map((_, index) => 10 + index)),
+    rootPos: new Float32Array([0, 0, 0.78]),
+    rootQuat: new Float32Array([1, 0, 0, 0]),
+    rootAngVel: new Float32Array([4, 5, 6])
+  });
+
+  assert.equal(policy.numObs, 1590);
+  assert.equal(observation.length, 1590);
+
+  const jointVelStart = 1 + 96 + 3 + 638 + 11 + 33 + 27 + 27 + 261;
+  assert.equal(observation[jointVelStart], 10);
+  assert.equal(observation[jointVelStart + config.policy_joint_names.length], 1);
 });
 
 function makeTrackingClip(jointNames, frames = 3) {
@@ -940,6 +2079,36 @@ test('browser policy runtime exposes default stance from the active policy', asy
   assert.equal(runtime.status().last_policy_result.joint_count, 1);
 }
 );
+
+test('browser policy runtime reset converts current state payload into policy state', () => {
+  const runtime = new BrowserPolicyRuntime();
+  let capturedState = null;
+  runtime.lastOutput = { mode: 'joint_position_target' };
+  runtime.activePolicy = {
+    policyJointNames: ['joint_b', 'joint_a'],
+    reset(state) {
+      capturedState = state;
+    }
+  };
+
+  runtime.reset({
+    joint_names: ['joint_a', 'joint_b'],
+    state: {
+      joint_positions: [1, 2],
+      joint_velocities: [3, 4],
+      root_translation: [5, 6, 7],
+      root_rotation_wxyz: [0.5, 0.5, 0.5, 0.5],
+      root_angular_velocity: [8, 9, 10]
+    }
+  });
+
+  assert.deepEqual(Array.from(capturedState.jointPos), [2, 1]);
+  assert.deepEqual(Array.from(capturedState.jointVel), [4, 3]);
+  assert.deepEqual(Array.from(capturedState.rootPos), [5, 6, 7]);
+  assert.deepEqual(Array.from(capturedState.rootQuat), [0.5, 0.5, 0.5, 0.5]);
+  assert.deepEqual(Array.from(capturedState.rootAngVel), [8, 9, 10]);
+  assert.equal(runtime.lastOutput, null);
+});
 
 test('browser policy runtime can switch tracking motions for ONNX policies', () => {
   const runtime = new BrowserPolicyRuntime();

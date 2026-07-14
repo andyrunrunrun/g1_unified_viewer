@@ -105,6 +105,17 @@
               <span v-if="entry.node.format" class="tree-format">{{ entry.node.format }}</span>
             </button>
           </div>
+          <button
+            v-if="browserHasMore"
+            id="browserLoadMoreButton"
+            class="command-button ghost browser-load-more"
+            type="button"
+            :disabled="browserLoadingMore"
+            @click="loadMoreBrowserNodes"
+          >
+            <ListPlus class="control-icon" aria-hidden="true" />
+            <span>{{ browserLoadingMore ? t('data.loadMoreLoading') : t('data.loadMore', { loaded: browserLoadedCount, total: browserTotalCount }) }}</span>
+          </button>
         </section>
 
         <section class="panel workflow-card workflow-panel motion-workflow-card">
@@ -228,6 +239,7 @@
                 <option value="sonic">sonic</option>
                 <option value="twist2">twist2</option>
                 <option value="motion_tracking_npz">motion_tracking_npz</option>
+                <option value="holomotion_npz">holomotion_npz</option>
                 <option value="kimodo_csv">kimodo_csv</option>
               </select>
             </label>
@@ -545,6 +557,7 @@ import {
   Footprints,
   GitCompareArrows,
   Languages,
+  ListPlus,
   LocateFixed,
   Moon,
   Pause,
@@ -586,10 +599,14 @@ const uiTheme = ref('dark');
 const selectedCameraPreset = ref('default');
 const cameraFollowEnabled = ref(true);
 const DEFAULT_DATASET_ROOT = '/home/huanghao/source/datasets/gmr_retarget_x/AMASS_numpy123';
+const BROWSER_PAGE_SIZE = 1000;
 const pathInput = ref(DEFAULT_DATASET_ROOT);
 const treeNodes = ref([]);
 const browserRoot = ref('');
 const browserParent = ref(null);
+const browserTotalCount = ref(0);
+const browserOffset = ref(0);
+const browserLoadingMore = ref(false);
 const frameInput = ref(0);
 const trimStartInput = ref(0);
 const trimEndInput = ref(0);
@@ -707,7 +724,10 @@ const UI_MESSAGES = Object.freeze({
       noDirectory: '未选择目录',
       rootRequired: '请输入数据根目录。',
       scanLoading: '扫描目录中...',
-      currentDirectory: '当前目录: {root}，当前层节点数: {count}'
+      currentDirectory: '当前目录: {root}，当前层节点数: {count}',
+      currentDirectoryPaged: '当前目录: {root}，已加载 {loaded}/{total}',
+      loadMore: '加载更多 ({loaded}/{total})',
+      loadMoreLoading: '继续加载中...'
     },
     motion: {
       title: '动作',
@@ -930,7 +950,10 @@ const UI_MESSAGES = Object.freeze({
       noDirectory: 'No directory selected',
       rootRequired: 'Enter a dataset root.',
       scanLoading: 'Scanning directory...',
-      currentDirectory: 'Current directory: {root}, nodes in this level: {count}'
+      currentDirectory: 'Current directory: {root}, nodes in this level: {count}',
+      currentDirectoryPaged: 'Current directory: {root}, loaded {loaded}/{total}',
+      loadMore: 'Load more ({loaded}/{total})',
+      loadMoreLoading: 'Loading more...'
     },
     motion: {
       title: 'Motion',
@@ -1119,6 +1142,7 @@ const browserPolicyRuntime = createBrowserPolicyRuntime();
 let frameCache = {
   sequenceId: null,
   loadingSequenceId: null,
+  fps: 50,
   jointNames: [],
   bodyNames: [],
   frames: []
@@ -1205,6 +1229,8 @@ const clipSummaryEntries = computed(() => [
   ['FPS', activeSequence.value ? Number(activeSequence.value.fps).toFixed(2) : '-']
 ]);
 const visibleTreeNodes = computed(() => flattenBrowserNodes(treeNodes.value));
+const browserLoadedCount = computed(() => treeNodes.value.length);
+const browserHasMore = computed(() => treeNodes.value.length < browserTotalCount.value);
 const policyGroups = computed(() => {
   const mockPolicy = policies.value.find((policy) => policy.policy_id === MOCK_BROWSER_POLICY_ID);
   const groups = [];
@@ -1655,6 +1681,10 @@ async function selectPolicyGroup(groupId) {
     return;
   }
   selectedPolicyGroupId.value = group.id;
+  if (group.policies.length === 1 && group.policies[0]?.policy_id) {
+    await switchSelectedPolicy(group.policies[0].policy_id);
+    return;
+  }
   if (group.id === 'mock') {
     await switchSelectedPolicy(MOCK_BROWSER_POLICY_ID);
   }
@@ -1980,7 +2010,9 @@ async function prepareBrowserTrackingMotion() {
 }
 
 function resetBrowserPolicyTrackingToDefault() {
-  browserPolicyRuntime.requestMotion('default', currentPhysicsStatePayload(frameCache.jointNames));
+  const currentStatePayload = currentPhysicsStatePayload(frameCache.jointNames);
+  browserPolicyRuntime.reset(currentStatePayload);
+  browserPolicyRuntime.requestMotion('default', currentStatePayload);
 }
 
 function browserMotionStartTransitionSteps() {
@@ -2248,6 +2280,18 @@ function advanceBrowserPhysicsReferenceFrame() {
     browserPhysics.referenceFrame = sourceFrame;
     return { frameIndex: sourceFrame, looped: false, ended: false, transitioning: true };
   }
+  if (trackingState.staticTail) {
+    browserPhysics.endHoldStepsRemaining = 0;
+    browserPhysics.endHoldActive = false;
+    if (session.value?.loop_enabled) {
+      browserPhysics.referenceFrameFloat = 0;
+      browserPhysics.referenceFrame = 0;
+      return { frameIndex: 0, looped: true, ended: false, staticTail: true };
+    }
+    browserPhysics.referenceFrameFloat = sourceFrame;
+    browserPhysics.referenceFrame = sourceFrame;
+    return { frameIndex: sourceFrame, looped: false, ended: true, staticTail: true };
+  }
   if (trackingState.currentDone) {
     if (session.value?.loop_enabled) {
       browserPhysics.endHoldStepsRemaining = 0;
@@ -2507,6 +2551,7 @@ async function loadFrameCacheForActiveSequence() {
   frameCache = {
     sequenceId: null,
     loadingSequenceId: sequence.sequence_id,
+    fps: Number(sequence.fps) || 50,
     jointNames: [],
     bodyNames: [],
     frames: []
@@ -2529,6 +2574,7 @@ async function loadFrameCacheForActiveSequence() {
         frameCache = {
           sequenceId: payload.sequence_id,
           loadingSequenceId: sequence.sequence_id,
+          fps: Number(sequence.fps) || 50,
           jointNames: payload.joint_names || sequence.joint_names || [],
           bodyNames: payload.body_names || sequence.body_names || [],
           frames: []
@@ -2601,14 +2647,54 @@ async function scanTree() {
 async function scanTreeAt(path) {
   try {
     setStatus(treeStatus, 'data.scanLoading');
-    const payload = await postJson('/api/browser/list', { path });
+    const payload = await postJson('/api/browser/list', {
+      path,
+      offset: 0,
+      limit: BROWSER_PAGE_SIZE
+    });
     browserRoot.value = payload.root;
     browserParent.value = payload.parent || null;
     pathInput.value = payload.root;
     treeNodes.value = payload.nodes;
-    setStatus(treeStatus, makeStatus('data.currentDirectory', { root: payload.root, count: payload.nodes.length }));
+    browserTotalCount.value = payload.total_count ?? payload.nodes.length;
+    browserOffset.value = payload.offset + payload.nodes.length;
+    setStatus(treeStatus, makeStatus('data.currentDirectoryPaged', {
+      root: payload.root,
+      loaded: treeNodes.value.length,
+      total: browserTotalCount.value
+    }));
   } catch (error) {
     setStatus(treeStatus, error.message, true);
+  }
+}
+
+async function loadMoreBrowserNodes() {
+  if (!browserRoot.value || !browserHasMore.value || browserLoadingMore.value) {
+    return;
+  }
+  try {
+    browserLoadingMore.value = true;
+    setStatus(treeStatus, 'data.loadMoreLoading');
+    const payload = await postJson('/api/browser/list', {
+      path: browserRoot.value,
+      offset: browserOffset.value,
+      limit: BROWSER_PAGE_SIZE
+    });
+    browserRoot.value = payload.root;
+    browserParent.value = payload.parent || null;
+    pathInput.value = payload.root;
+    treeNodes.value = [...treeNodes.value, ...payload.nodes];
+    browserTotalCount.value = payload.total_count ?? treeNodes.value.length;
+    browserOffset.value = payload.offset + payload.nodes.length;
+    setStatus(treeStatus, makeStatus('data.currentDirectoryPaged', {
+      root: payload.root,
+      loaded: treeNodes.value.length,
+      total: browserTotalCount.value
+    }));
+  } catch (error) {
+    setStatus(treeStatus, error.message, true);
+  } finally {
+    browserLoadingMore.value = false;
   }
 }
 
@@ -2634,6 +2720,7 @@ async function handleTreeNode(node) {
   frameCache = {
     sequenceId: null,
     loadingSequenceId: null,
+    fps: 50,
     jointNames: [],
     bodyNames: [],
     frames: []

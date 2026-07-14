@@ -60,11 +60,123 @@ function toFloatArray(value, length, fallback = 0) {
   return out;
 }
 
-function normalizeMotionClip(frameCache) {
+function hasFiniteVector(values, width) {
+  if (!values || values.length < width) {
+    return false;
+  }
+  for (let index = 0; index < width; index += 1) {
+    if (!Number.isFinite(Number(values[index]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isZeroVector(values, width) {
+  for (let index = 0; index < width; index += 1) {
+    if (Math.abs(Number(values?.[index] ?? 0)) > 1e-8) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function readFps(frameCache, fallback = 50) {
+  const candidates = [
+    frameCache?.fps,
+    frameCache?.metadata?.motion_fps,
+    frameCache?.metadata?.fps
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+function readJointRows(rows, length, fallback = [], { requireFullLength = false } = {}) {
+  return (rows ?? []).map((row) => {
+    if (requireFullLength && (!row || row.length !== length)) {
+      return new Float32Array();
+    }
+    const out = new Float32Array(length);
+    for (let index = 0; index < length; index += 1) {
+      const value = Number(row?.[index]);
+      out[index] = Number.isFinite(value) ? value : Number(fallback?.[index] ?? 0);
+    }
+    return out;
+  });
+}
+
+function remapJointRows(rows, sourceNames, targetNames, fallback = [], { requireFullLength = false } = {}) {
+  const sourceIndex = new Map((sourceNames ?? []).map((name, index) => [name, index]));
+  if (!sourceIndex.size || !targetNames?.length) {
+    return readJointRows(rows, targetNames?.length ?? 0, fallback, { requireFullLength });
+  }
+  return (rows ?? []).map((row) => {
+    if (requireFullLength && (!row || row.length < sourceIndex.size)) {
+      return new Float32Array();
+    }
+    const out = new Float32Array(targetNames.length);
+    for (let index = 0; index < targetNames.length; index += 1) {
+      const source = sourceIndex.get(targetNames[index]);
+      const value = Number(row?.[source]);
+      out[index] = Number.isFinite(value) ? value : Number(fallback?.[index] ?? 0);
+    }
+    return out;
+  });
+}
+
+function estimateJointVelocity(rows, index, fps, width) {
+  if (!rows.length || rows.length <= 1) {
+    return new Float32Array(width);
+  }
+  const current = clampIndex(index, rows.length);
+  const other = current < rows.length - 1 ? current + 1 : current - 1;
+  const sign = other > current ? 1 : -1;
+  const out = new Float32Array(width);
+  for (let joint = 0; joint < width; joint += 1) {
+    out[joint] = sign * (Number(rows[other]?.[joint] ?? 0) - Number(rows[current]?.[joint] ?? 0)) * fps;
+  }
+  return out;
+}
+
+function useProvidedVelocityOrEstimate(values, estimate, width) {
+  if (!hasFiniteVector(values, width)) {
+    return estimate;
+  }
+  if (isZeroVector(values, width) && !isZeroVector(estimate, width)) {
+    return estimate;
+  }
+  return Float32Array.from(values);
+}
+
+function normalizeMotionClip(frameCache, policy = null) {
   const frames = frameCache?.frames ?? [];
+  const targetNames = policy?.policyJointNames ?? SONIC_MUJOCO_JOINT_ORDER;
+  const jointCount = policy?.numActions ?? targetNames.length;
+  const jointNames = frameCache?.joint_names ?? frameCache?.jointNames ?? null;
+  const jointPos = remapJointRows(
+    frames.map((frame) => frame.joint_positions),
+    jointNames,
+    targetNames,
+    policy?.defaultJointPos
+  );
+  const providedJointVel = remapJointRows(
+    frames.map((frame) => frame.joint_velocities),
+    jointNames,
+    targetNames,
+    [],
+    { requireFullLength: true }
+  );
+  const fps = readFps(frameCache);
   return {
-    jointPos: frames.map((frame) => Float32Array.from(frame.joint_positions ?? [])),
-    jointVel: frames.map((frame) => Float32Array.from(frame.joint_velocities ?? [])),
+    jointPos,
+    jointVel: providedJointVel.map((row, index) => (
+      useProvidedVelocityOrEstimate(row, estimateJointVelocity(jointPos, index, fps, jointCount), jointCount)
+    )),
     rootPos: frames.map((frame) => Float32Array.from(frame.root_translation ?? [0, 0, 0.78])),
     rootQuat: frames.map((frame) => Float32Array.from(frame.root_rotation_wxyz ?? [1, 0, 0, 0]))
   };
@@ -167,6 +279,40 @@ function normalizeQuat(quat) {
   return [w * inv, x * inv, y * inv, z * inv];
 }
 
+function maxAbs(values, width = values?.length ?? 0) {
+  let result = 0;
+  for (let index = 0; index < width; index += 1) {
+    const value = Math.abs(Number(values?.[index] ?? 0));
+    if (value > result) {
+      result = value;
+    }
+  }
+  return result;
+}
+
+function maxAbsDiff(a, b, width = Math.max(a?.length ?? 0, b?.length ?? 0)) {
+  let result = 0;
+  for (let index = 0; index < width; index += 1) {
+    const value = Math.abs(Number(a?.[index] ?? 0) - Number(b?.[index] ?? 0));
+    if (value > result) {
+      result = value;
+    }
+  }
+  return result;
+}
+
+function quatAngularDistance(a, b) {
+  const qa = normalizeQuat(a);
+  const qb = normalizeQuat(b);
+  const dot = Math.abs(
+    qa[0] * qb[0]
+    + qa[1] * qb[1]
+    + qa[2] * qb[2]
+    + qa[3] * qb[3]
+  );
+  return 2 * Math.acos(Math.min(1, Math.max(-1, dot)));
+}
+
 function quatConjugate(quat) {
   const [w, x, y, z] = normalizeQuat(quat);
   return [w, -x, -y, -z];
@@ -266,10 +412,11 @@ class SonicTracking {
     if (!name || !frameCache) {
       return false;
     }
-    const clip = normalizeMotionClip(frameCache);
+    const clip = normalizeMotionClip(frameCache, this.policy);
     if (!clip.jointPos.length) {
       return false;
     }
+    clip.staticTailStartFrame = this._findStaticTailStartFrame(clip);
     this.motions.set(name, clip);
     return true;
   }
@@ -382,6 +529,17 @@ class SonicTracking {
     const sourceFrame = this.currentName === 'default'
       ? 0
       : this.motionStartIndex + Math.max(0, this.refIdx - this.transitionLen);
+    const clip = this._clip();
+    const motionIndex = this.currentName === 'default'
+      ? 0
+      : clampIndex(sourceFrame, clip.jointPos.length);
+    const staticTailStartFrame = Number.isFinite(clip.staticTailStartFrame)
+      ? clip.staticTailStartFrame
+      : null;
+    const staticTail = this.currentName !== 'default'
+      && !inTransition
+      && staticTailStartFrame !== null
+      && motionIndex >= staticTailStartFrame;
     return {
       available: true,
       currentName: this.currentName,
@@ -392,6 +550,8 @@ class SonicTracking {
       motionLen: this.motionLen,
       sourceStartFrame: this.motionStartIndex,
       sourceFrame,
+      staticTail,
+      staticTailStartFrame,
       inTransition,
       isDefault: this.currentName === 'default'
     };
@@ -420,6 +580,50 @@ class SonicTracking {
       rootPos: lerpRows(currentRootPos, firstRootPos, steps),
       rootQuat: slerpQuats(currentRootQuat, firstRootQuat, steps)
     };
+  }
+
+  _findStaticTailStartFrame(clip) {
+    const length = clip?.jointPos?.length ?? 0;
+    const minFrames = Math.max(1, Math.floor(Number(this.policy.staticTailMinFrames) || 12));
+    if (length < minFrames) {
+      return null;
+    }
+
+    let start = length - 1;
+    for (let index = length - 2; index >= 0; index -= 1) {
+      if (!this._framesEquivalentForStaticTail(clip, index, index + 1)) {
+        break;
+      }
+      start = index;
+    }
+
+    if (length - start < minFrames) {
+      return null;
+    }
+
+    const velocityEps = Number(this.policy.staticTailVelocityEps) || 0.08;
+    for (let index = start; index < length; index += 1) {
+      if (maxAbs(clip.jointVel[index], this.policy.numActions) > velocityEps) {
+        return null;
+      }
+    }
+    return start;
+  }
+
+  _framesEquivalentForStaticTail(clip, first, second) {
+    const jointEps = Number(this.policy.staticTailJointEps) || 0.015;
+    const rootEps = Number(this.policy.staticTailRootEps) || 0.01;
+    const quatEps = Number(this.policy.staticTailQuatEps) || 0.02;
+    if (maxAbsDiff(clip.jointPos[first], clip.jointPos[second], this.policy.numActions) > jointEps) {
+      return false;
+    }
+    if (maxAbsDiff(clip.rootPos[first], clip.rootPos[second], 3) > rootEps) {
+      return false;
+    }
+    if (quatAngularDistance(clip.rootQuat[first], clip.rootQuat[second]) > quatEps) {
+      return false;
+    }
+    return true;
   }
 }
 
@@ -452,6 +656,11 @@ class SonicBrowserPolicy {
     this.motionFutureFrames = 10;
     this.motionStep = 5;
     this.encoderMode = 0;
+    this.staticTailMinFrames = 12;
+    this.staticTailJointEps = 0.015;
+    this.staticTailVelocityEps = 0.08;
+    this.staticTailRootEps = 0.01;
+    this.staticTailQuatEps = 0.02;
     this.headingState = {
       initBaseQuat: [1, 0, 0, 0],
       initRefQuat: [1, 0, 0, 0],
@@ -492,6 +701,12 @@ class SonicBrowserPolicy {
     this.motionFutureFrames = Number(this.config.sonic?.motion_future_frames ?? 10);
     this.motionStep = Number(this.config.sonic?.motion_step ?? 5);
     this.encoderMode = Number(this.config.sonic?.encoder_mode ?? 0);
+    const staticTailConfig = this.config.sonic?.static_tail ?? {};
+    this.staticTailMinFrames = Math.max(1, Math.floor(Number(staticTailConfig.min_frames ?? 12) || 12));
+    this.staticTailJointEps = Number(staticTailConfig.joint_eps ?? 0.015) || 0.015;
+    this.staticTailVelocityEps = Number(staticTailConfig.velocity_eps ?? 0.08) || 0.08;
+    this.staticTailRootEps = Number(staticTailConfig.root_eps ?? 0.01) || 0.01;
+    this.staticTailQuatEps = Number(staticTailConfig.quat_eps ?? 0.02) || 0.02;
     this.tokenState = new Float32Array(Number(this.config.sonic?.token_dim ?? 64));
     this.lastActions = new Float32Array(this.numActions);
     this.defaultClip = makeDefaultClip(this.defaultJointPos, this.resetRootTranslation);

@@ -14,12 +14,13 @@
   "tags": [
     "onnx",
     "browser",
-    "tracking"
+    "tracking",
+    "1590"
   ],
-  "description": "Browser ONNX Runtime Web policy loader compatible with humanoid-policy-viewer checkpoints.",
+  "description": "Browser ONNX Runtime Web motion tracking policy using the latest 1590-dimensional bigger finetune checkpoint.",
   "description_i18n": {
-    "zh": "浏览器 ONNX Runtime Web 运动追踪策略，兼容 humanoid-policy-viewer 检查点。",
-    "en": "Browser ONNX Runtime Web motion tracking policy compatible with humanoid-policy-viewer checkpoints."
+    "zh": "浏览器 ONNX Runtime Web 运动追踪策略，使用最新 1590 维 bigger finetune 检查点。",
+    "en": "Browser ONNX Runtime Web motion tracking policy using the latest 1590-dimensional bigger finetune checkpoint."
   },
   "model_overrides": {
     "policy_latest.onnx": {

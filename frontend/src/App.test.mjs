@@ -53,6 +53,7 @@ test('motion frame cache loads in cancellable chunks without blocking session po
 
   const cacheBody = functionBody('loadFrameCacheForActiveSequence');
   assert.match(cacheBody, /frameCache\.loadingSequenceId === sequence\.sequence_id/);
+  assert.match(cacheBody, /fps:\s*Number\(sequence\.fps\) \|\| 50/);
   assert.match(cacheBody, /new AbortController\(\)/);
   assert.match(cacheBody, /for \(let start = 0; start < sequence\.frame_count; start \+= FRAME_CACHE_CHUNK_SIZE\)/);
   assert.match(cacheBody, /end:\s*Math\.min\(sequence\.frame_count,\s*start \+ FRAME_CACHE_CHUNK_SIZE\)/);
@@ -210,7 +211,7 @@ test('playback selects the active clip as ONNX tracking target while pause selec
   assert.match(source, /const currentStatePayload = currentPhysicsStatePayload\(frameCache\.jointNames\)/);
   assert.match(source, /browserPolicyRuntime\.requestMotion\(\s*ACTIVE_BROWSER_MOTION_NAME,\s*currentStatePayload/);
   assert.match(source, /\{\s*startFrame,\s*transitionSteps:\s*browserMotionStartTransitionSteps\(\)\s*\}/);
-  assert.match(source, /browserPolicyRuntime\.requestMotion\('default',\s*currentPhysicsStatePayload/);
+  assert.match(source, /function resetBrowserPolicyTrackingToDefault\(\)/);
 
   const playBody = functionBody('playPlayback');
   const pauseBody = functionBody('pausePlayback');
@@ -317,6 +318,7 @@ test('policy selector uses mock first and folder style ONNX categories', () => {
   assert.match(source, /const policyGroups = computed/);
   assert.match(source, /const visiblePolicies = computed/);
   assert.match(source, /function selectPolicyGroup\(groupId\)/);
+  assert.match(source, /if \(group\.policies\.length === 1 && group\.policies\[0\]\?\.policy_id\) \{[\s\S]*?await switchSelectedPolicy\(group\.policies\[0\]\.policy_id\)[\s\S]*?return;[\s\S]*?\}/);
   assert.match(source, /if \(group\?\.id === 'mock'\) \{[\s\S]*?return \[\];[\s\S]*?\}/);
   assert.match(source, /id="policyGroupList"/);
   assert.match(source, /id="policyModelList"/);
@@ -571,6 +573,27 @@ test('physics completion holds the final active target before default stance', (
   assert.match(loopBody, /else \{[\s\S]*?referencePayload = currentTrackingReferencePayload\(\) \|\| framePayloadForIndex\(referenceFrame\.frameIndex\)/);
 });
 
+test('static active clip tails leave tracking without running the active policy until clip end', () => {
+  const advanceBody = source.match(/function advanceBrowserPhysicsReferenceFrame\(\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
+  const loopBody = source.match(/async function browserPhysicsLoop\(\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
+
+  assert.match(advanceBody, /trackingState\.staticTail/);
+  assert.ok(
+    advanceBody.indexOf('trackingState.staticTail') < advanceBody.indexOf('trackingState.currentDone'),
+    'static tail handling must run before normal completion hold'
+  );
+  assert.match(advanceBody, /staticTail: true/);
+  assert.match(loopBody, /if \(referenceFrame\.ended\) \{[\s\S]*?resetBrowserPolicyTrackingToDefault\(\)/);
+});
+
+test('default stance recovery resets browser policy state from the live robot state', () => {
+  const resetBody = source.match(/function resetBrowserPolicyTrackingToDefault\(\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
+
+  assert.match(resetBody, /const currentStatePayload = currentPhysicsStatePayload\(frameCache\.jointNames\)/);
+  assert.match(resetBody, /browserPolicyRuntime\.reset\(currentStatePayload\)/);
+  assert.match(resetBody, /browserPolicyRuntime\.requestMotion\('default', currentStatePayload\)/);
+});
+
 test('completed non-loop playback resets progress to the first frame', () => {
   const physicsAdvanceBody = source.match(/function advanceBrowserPhysicsReferenceFrame\(\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
   const localPlaybackBody = source.match(/function localPlaybackStep\(timestamp\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
@@ -596,6 +619,30 @@ test('motion browser renders lazy directory results with relative path labels', 
   const handleBody = source.match(/async function handleTreeNode\(node\) \{(?<body>[\s\S]*?)\n\}/).groups.body;
   assert.match(handleBody, /if \(node\.node_type === 'directory'\) \{[\s\S]*?await scanTreeAt\(node\.path\)[\s\S]*?return;/);
   assert.match(handleBody, /if \(node\.node_type !== 'motion'\) \{\s*return;\s*\}/);
+});
+
+test('motion browser pages large directories and appends load-more results', () => {
+  assert.match(source, /const BROWSER_PAGE_SIZE = \d+/);
+  assert.match(source, /const browserTotalCount = ref\(0\)/);
+  assert.match(source, /const browserOffset = ref\(0\)/);
+  assert.match(source, /const browserHasMore = computed\(\(\) => treeNodes\.value\.length < browserTotalCount\.value\)/);
+  assert.match(source, /id="browserLoadMoreButton"/);
+  assert.match(source, /v-if="browserHasMore"/);
+  assert.match(source, /@click="loadMoreBrowserNodes"/);
+
+  const scanBody = asyncFunctionBody('scanTreeAt');
+  assert.match(scanBody, /offset:\s*0/);
+  assert.match(scanBody, /limit:\s*BROWSER_PAGE_SIZE/);
+  assert.match(scanBody, /treeNodes\.value = payload\.nodes/);
+  assert.match(scanBody, /browserTotalCount\.value = payload\.total_count \?\? payload\.nodes\.length/);
+  assert.match(scanBody, /browserOffset\.value = payload\.offset \+ payload\.nodes\.length/);
+
+  const loadMoreBody = asyncFunctionBody('loadMoreBrowserNodes');
+  assert.match(loadMoreBody, /path:\s*browserRoot\.value/);
+  assert.match(loadMoreBody, /offset:\s*browserOffset\.value/);
+  assert.match(loadMoreBody, /limit:\s*BROWSER_PAGE_SIZE/);
+  assert.match(loadMoreBody, /treeNodes\.value = \[\.\.\.treeNodes\.value,\s*\.\.\.payload\.nodes\]/);
+  assert.match(loadMoreBody, /browserOffset\.value = payload\.offset \+ payload\.nodes\.length/);
 });
 
 test('motion browser exposes parent navigation for lazy folder browsing', () => {
@@ -643,6 +690,7 @@ test('trim export UI lets users choose format, twist2 extension, output director
   assert.match(source, /id="exportFormatSelect"/);
   assert.match(source, /v-model="exportFormat"/);
   assert.match(source, /<option value="motion_tracking_npz">motion_tracking_npz<\/option>/);
+  assert.match(source, /<option value="holomotion_npz">holomotion_npz<\/option>/);
   assert.match(source, /<option value="kimodo_csv">kimodo_csv<\/option>/);
   assert.match(source, /id="twist2ExtensionSelect"/);
   assert.match(source, /v-model="twist2Extension"/);

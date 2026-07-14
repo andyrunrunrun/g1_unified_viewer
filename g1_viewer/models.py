@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field, root_validator
 
 
 SourceType = Literal["dataset", "policy"]
-MotionFormat = Literal["sonic", "twist2", "motion_tracking_npz", "kimodo_csv", "policy"]
-ExportMotionFormat = Literal["sonic", "twist2", "motion_tracking_npz", "kimodo_csv"]
+MotionFormat = Literal["sonic", "twist2", "motion_tracking_npz", "holomotion_npz", "kimodo_csv", "policy"]
+ExportMotionFormat = Literal["sonic", "twist2", "motion_tracking_npz", "holomotion_npz", "kimodo_csv"]
 Twist2ExportExtension = Literal[".pkl", ".npz", ".json"]
 PlaybackState = Literal["empty", "stopped", "paused", "playing"]
 ViewMode = Literal["dataset", "policy"]
@@ -36,10 +36,14 @@ class CanonicalRobotState(BaseModel):
     timestamp: float
     root_translation: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     root_rotation_wxyz: list[float] = Field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])
+    root_linear_velocity: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    root_angular_velocity: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     joint_positions: list[float] = Field(default_factory=list)
     joint_velocities: list[float] = Field(default_factory=list)
     body_positions: list[list[float]] = Field(default_factory=list)
     body_rotations_wxyz: list[list[float]] = Field(default_factory=list)
+    body_linear_velocities: list[list[float]] = Field(default_factory=list)
+    body_angular_velocities: list[list[float]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -104,12 +108,18 @@ class BrowserNode(BaseModel):
 
 class BrowserListRequest(BaseModel):
     path: str
+    limit: int = Field(default=1000, ge=1, le=5000)
+    offset: int = Field(default=0, ge=0)
 
 
 class BrowserListResponse(BaseModel):
     root: str
     parent: str | None = None
     nodes: list[BrowserNode]
+    total_count: int = 0
+    offset: int = 0
+    limit: int = 1000
+    has_more: bool = False
 
 
 class LoadClipRequest(BaseModel):

@@ -1,0 +1,26 @@
+{
+  "policy_id": "holomotion_motion_tracking",
+  "display_name": "HoloMotion Motion Tracking",
+  "display_name_i18n": {
+    "zh": "HoloMotion 动作追踪",
+    "en": "HoloMotion Motion Tracking"
+  },
+  "robot_type": "g1",
+  "runtime": "browser",
+  "framework": "custom_js",
+  "format_id": "holomotion",
+  "module_path": "./HoloMotionPolicy.js",
+  "config_path": "/policy-plugins/holomotion/holomotion_policy_config.json",
+  "control_mode": "joint_position_target",
+  "tags": [
+    "browser",
+    "onnx",
+    "holomotion",
+    "tracking"
+  ],
+  "description": "Browser ONNX Runtime Web policy adapter for the HoloMotion v1.2 G1 motion tracking model.",
+  "description_i18n": {
+    "zh": "浏览器 ONNX Runtime Web HoloMotion v1.2 G1 动作追踪策略。",
+    "en": "Browser ONNX Runtime Web policy adapter for the HoloMotion v1.2 G1 motion tracking model."
+  }
+}

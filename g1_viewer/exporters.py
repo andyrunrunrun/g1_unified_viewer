@@ -28,7 +28,9 @@ def _wxyz_to_xyzw(quaternions: np.ndarray) -> np.ndarray:
     quaternions = np.asarray(quaternions, dtype=np.float32)
     if quaternions.ndim == 1:
         return quaternions[[1, 2, 3, 0]]
-    return quaternions[:, [1, 2, 3, 0]]
+    if quaternions.shape[-1] != 4:
+        raise ValueError(f"Quaternion arrays must have last dimension 4, got {quaternions.shape}")
+    return quaternions[..., [1, 2, 3, 0]]
 
 
 def trim_sequence(sequence: StateSequence, start_frame: int, end_frame: int) -> StateSequence:
@@ -100,13 +102,15 @@ def export_trimmed_sequence(
         )
     if target_format == "motion_tracking_npz":
         return _export_motion_tracking_npz(trimmed, export_root, use_format_subdir=use_format_subdir)
+    if target_format == "holomotion_npz":
+        return _export_holomotion_npz(trimmed, export_root, use_format_subdir=use_format_subdir)
     if target_format == "kimodo_csv":
         return _export_kimodo_csv(trimmed, export_root, use_format_subdir=use_format_subdir)
     raise ValueError(f"Unsupported export format: {target_format}")
 
 
 def _default_export_format(sequence: StateSequence) -> ExportMotionFormat:
-    if sequence.source_format in {"sonic", "twist2", "motion_tracking_npz", "kimodo_csv"}:
+    if sequence.source_format in {"sonic", "twist2", "motion_tracking_npz", "holomotion_npz", "kimodo_csv"}:
         return sequence.source_format
     raise ValueError(f"Unsupported export format: {sequence.source_format}")
 
@@ -229,6 +233,44 @@ def _export_motion_tracking_npz(
         ),
         "dof_pos": np.asarray([frame.joint_positions for frame in sequence.frames], dtype=np.float32),
         "local_body_pos": np.asarray([frame.body_positions for frame in sequence.frames], dtype=np.float32),
+        "joint_names": np.asarray(sequence.joint_names),
+        "body_names": np.asarray(sequence.body_names),
+    }
+    np.savez(target_path, **payload)
+    return target_path
+
+
+def _export_holomotion_npz(
+    sequence: StateSequence,
+    export_root: Path,
+    *,
+    use_format_subdir: bool = True,
+) -> Path:
+    target_dir = export_root / "holomotion_npz" if use_format_subdir else export_root
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{_sanitize_name(sequence.name)}.npz"
+
+    metadata = {
+        "motion_key": sequence.name,
+        "raw_motion_key": sequence.name,
+        "motion_fps": float(sequence.fps),
+        "num_frames": int(sequence.frame_count),
+        "num_dofs": len(sequence.joint_names),
+        "num_bodies": len(sequence.body_names),
+    }
+    payload = {
+        "metadata": json.dumps(metadata),
+        "ref_dof_pos": np.asarray([frame.joint_positions for frame in sequence.frames], dtype=np.float32),
+        "ref_dof_vel": np.asarray([frame.joint_velocities for frame in sequence.frames], dtype=np.float32),
+        "ref_global_translation": np.asarray([frame.body_positions for frame in sequence.frames], dtype=np.float32),
+        "ref_global_rotation_quat": _wxyz_to_xyzw(
+            np.asarray([frame.body_rotations_wxyz for frame in sequence.frames], dtype=np.float32)
+        ),
+        "ref_global_velocity": np.asarray([frame.body_linear_velocities for frame in sequence.frames], dtype=np.float32),
+        "ref_global_angular_velocity": np.asarray(
+            [frame.body_angular_velocities for frame in sequence.frames],
+            dtype=np.float32,
+        ),
         "joint_names": np.asarray(sequence.joint_names),
         "body_names": np.asarray(sequence.body_names),
     }

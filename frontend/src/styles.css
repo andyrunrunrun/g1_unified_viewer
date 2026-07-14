@@ -1037,6 +1037,10 @@ input[type="range"] {
   gap: 8px;
 }
 
+.browser-load-more {
+  justify-content: center;
+}
+
 .data-browser-card input,
 .data-browser-card select,
 .motion-workflow-card input,

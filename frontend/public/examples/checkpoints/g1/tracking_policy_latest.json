@@ -12,13 +12,13 @@
         "loc",
         "scale",
         "action",
-        "sample_log_prob"
+        "action_log_prob"
       ],
       "in_shapes": [
         [
           [
             1,
-            623
+            1590
           ]
         ]
       ]
@@ -35,10 +35,16 @@
         "name": "TrackingCommandObsRaw",
         "future_steps": [
           0,
+          1,
           2,
+          3,
           4,
-          8,
-          16
+          -1,
+          -2,
+          -4,
+          -8,
+          -12,
+          -16
         ]
       },
       {
@@ -48,37 +54,77 @@
         "name": "TargetJointPosObs",
         "future_steps": [
           0,
+          1,
           2,
+          3,
           4,
-          8,
-          16
+          -1,
+          -2,
+          -4,
+          -8,
+          -12,
+          -16
         ]
       },
       {
         "name": "TargetRootZObs",
         "future_steps": [
           0,
+          1,
           2,
+          3,
           4,
-          8,
-          16
+          -1,
+          -2,
+          -4,
+          -8,
+          -12,
+          -16
         ]
       },
       {
         "name": "TargetProjectedGravityBObs",
         "future_steps": [
           0,
+          1,
           2,
+          3,
           4,
-          8,
-          16
+          -1,
+          -2,
+          -4,
+          -8,
+          -12,
+          -16
         ]
       },
       {
-        "name": "RootAngVelB"
+        "name": "RootAngVelBHistory",
+        "history_steps": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          8,
+          12,
+          16,
+          20
+        ]
       },
       {
-        "name": "ProjectedGravityB"
+        "name": "ProjectedGravityBHistory",
+        "history_steps": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          8,
+          12,
+          16,
+          20
+        ]
       },
       {
         "name": "JointPos",
@@ -88,12 +134,29 @@
           2,
           3,
           4,
-          8
+          8,
+          12,
+          16,
+          20
+        ]
+      },
+      {
+        "name": "JointVel",
+        "vel_steps": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          8,
+          12,
+          16,
+          20
         ]
       },
       {
         "name": "PrevActions",
-        "history_steps": 3
+        "history_steps": 8
       }
     ]
   },
@@ -140,24 +203,24 @@
     0.5,
     0.5,
     0.5,
-    1.0,
-    1.0,
+    1,
+    1,
     0.5,
     0.5,
-    1.0,
-    1.0,
+    1,
+    1,
     0.5,
     0.5,
-    1.0,
-    1.0,
-    1.0,
-    1.0,
-    1.0,
-    1.0,
-    1.0,
-    1.0,
-    1.0,
-    1.0
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
   ],
   "stiffness": [
     40.17923847137318,
@@ -256,24 +319,31 @@
     ],
     "future_steps": [
       0,
+      1,
       2,
+      3,
       4,
-      8,
-      16
+      -1,
+      -2,
+      -4,
+      -8,
+      -12,
+      -16
     ],
     "transition_steps": 100,
-    "motions_path": "./examples/checkpoints/g1/motions.json"
+    "motions_path": "./examples/checkpoints/g1/motions.json",
+    "switch_tail_keep_steps": 16
   },
   "default_joint_pos": [
     -0.28,
     -0.28,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
     0.5,
     0.5,
     0.35,
@@ -282,17 +352,17 @@
     -0.23,
     0.16,
     -0.16,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
+    0,
+    0,
+    0,
+    0,
     0.87,
     0.87,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
   ]
 }

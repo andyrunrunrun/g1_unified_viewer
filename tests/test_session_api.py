@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+import joblib
 import numpy as np
 
 from g1_viewer.api import create_app
@@ -61,6 +62,60 @@ def _write_motion_tracking_npz(path: Path, frame_count: int = 3) -> None:
         local_body_pos=local_body_pos,
         joint_names=np.asarray([f"joint_{idx}" for idx in range(29)]),
         body_names=np.asarray([f"body_{idx}" for idx in range(38)]),
+    )
+
+
+def _write_holomotion_npz(path: Path, frame_count: int = 3) -> None:
+    dof_pos = np.arange(frame_count * 29, dtype=np.float32).reshape(frame_count, 29) * 0.01
+    dof_vel = dof_pos + 10.0
+    translations = np.arange(frame_count * 3 * 3, dtype=np.float32).reshape(frame_count, 3, 3) * 0.1
+    translations[:, 0, 2] = 0.78
+    rotations_xyzw = np.zeros((frame_count, 3, 4), dtype=np.float32)
+    rotations_xyzw[:, :, 3] = 1.0
+    rotations_xyzw[1, 0] = np.asarray([0.0, 0.0, 0.70710678, 0.70710678], dtype=np.float32)
+    velocities = translations + 20.0
+    angular_velocities = translations + 30.0
+    np.savez(
+        path,
+        metadata=json.dumps(
+            {
+                "motion_key": "demo_holomotion",
+                "motion_fps": 50.0,
+                "num_frames": frame_count,
+                "num_dofs": 29,
+                "num_bodies": 3,
+            }
+        ),
+        ref_dof_pos=dof_pos,
+        ref_dof_vel=dof_vel,
+        ref_global_translation=translations,
+        ref_global_rotation_quat=rotations_xyzw,
+        ref_global_velocity=velocities,
+        ref_global_angular_velocity=angular_velocities,
+        joint_names=np.asarray([f"joint_{idx}" for idx in range(29)]),
+        body_names=np.asarray(["pelvis", "torso_link", "head_link"]),
+    )
+
+
+def _write_joblib_legacy_twist2_pkl(path: Path) -> None:
+    joblib.dump(
+        {
+            "legacy_motion": {
+                "root_trans_offset": np.asarray(
+                    [[0.0, 0.0, 0.78], [0.1, -0.2, 0.79]],
+                    dtype=np.float32,
+                ),
+                "pose_aa": np.zeros((2, 30, 3), dtype=np.float32),
+                "dof": np.arange(58, dtype=np.float32).reshape(2, 29) * 0.01,
+                "root_rot": np.asarray(
+                    [[1.0, 0.0, 0.0, 0.0], [0.70710678, 0.0, 0.0, 0.70710678]],
+                    dtype=np.float32,
+                ),
+                "smpl_joints": np.zeros((2, 24, 3), dtype=np.float32),
+                "fps": 30,
+            }
+        },
+        path,
     )
 
 
@@ -547,6 +602,25 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[0], 0.70710678)
         self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[3], 0.70710678)
 
+    def test_twist2_loader_accepts_joblib_legacy_robot_filtered_pickle(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "jump_and_land_heavy_001__A001_M.pkl"
+            _write_joblib_legacy_twist2_pkl(motion_path)
+
+            self.assertEqual(importer_detect_format(motion_path), "twist2")
+            sequence = load_sequence(str(motion_path))
+
+        self.assertEqual(sequence.source_format, "twist2")
+        self.assertEqual(sequence.name, "jump_and_land_heavy_001__A001_M")
+        self.assertEqual(sequence.fps, 30.0)
+        self.assertEqual(sequence.frame_count, 2)
+        self.assertEqual(sequence.metadata["pickle_loader"], "joblib")
+        self.assertEqual(sequence.metadata["keys"], ["dof", "fps", "pose_aa", "root_rot", "root_trans_offset", "smpl_joints"])
+        np.testing.assert_allclose(sequence.frames[1].root_translation, [0.1, -0.2, 0.79])
+        np.testing.assert_allclose(sequence.frames[1].joint_positions[:3], [0.29, 0.30, 0.31])
+        self.assertEqual(sequence.body_names, [])
+        self.assertEqual(sequence.frames[0].body_positions, [])
+
     def test_motion_tracking_npz_loader_preserves_schema_names(self) -> None:
         with TemporaryDirectory() as temp_dir:
             motion_path = Path(temp_dir) / "tracking_motion.npz"
@@ -574,6 +648,59 @@ class SessionStateSourceTest(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].format, "motion_tracking_npz")
         self.assertEqual(items[0].path, str(motion_path.resolve()))
+
+    def test_holomotion_npz_loader_preserves_reference_state_buffers(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "holomotion_motion.npz"
+            _write_holomotion_npz(motion_path)
+
+            self.assertEqual(importer_detect_format(motion_path), "holomotion_npz")
+            sequence = load_sequence(str(motion_path))
+
+        self.assertEqual(sequence.source_format, "holomotion_npz")
+        self.assertEqual(sequence.fps, 50.0)
+        self.assertEqual(sequence.frame_count, 3)
+        self.assertEqual(sequence.name, "demo_holomotion")
+        self.assertEqual(sequence.joint_names, [f"joint_{idx}" for idx in range(29)])
+        self.assertEqual(sequence.body_names, ["pelvis", "torso_link", "head_link"])
+        self.assertEqual(sequence.metadata["holomotion_prefix"], "ref")
+        self.assertEqual(sequence.metadata["num_bodies"], 3)
+        np.testing.assert_allclose(sequence.frames[0].root_translation, [0.0, 0.1, 0.78])
+        self.assertEqual(sequence.frames[0].root_rotation_wxyz, [1.0, 0.0, 0.0, 0.0])
+        self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[0], 0.70710678)
+        self.assertAlmostEqual(sequence.frames[1].root_rotation_wxyz[3], 0.70710678)
+        np.testing.assert_allclose(sequence.frames[0].root_linear_velocity, [20.0, 20.1, 20.78])
+        np.testing.assert_allclose(sequence.frames[0].root_angular_velocity, [30.0, 30.1, 30.78])
+        self.assertEqual(len(sequence.frames[0].body_positions), 3)
+        self.assertEqual(len(sequence.frames[0].body_linear_velocities), 3)
+        self.assertEqual(len(sequence.frames[0].body_angular_velocities), 3)
+
+    def test_holomotion_npz_frames_api_returns_velocity_fields(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "holomotion_motion.npz"
+            _write_holomotion_npz(motion_path)
+            client = TestClient(create_app(self.controller))
+            try:
+                load = client.post(
+                    "/api/session/load",
+                    json={"path": str(motion_path), "format": "holomotion_npz"},
+                )
+                self.assertEqual(load.status_code, 200)
+                sequence_id = load.json()["sequence"]["sequence_id"]
+
+                response = client.post(
+                    "/api/get_frames",
+                    json={"sequence_id": sequence_id, "start": 0, "end": 1},
+                )
+            finally:
+                client.close()
+
+        self.assertEqual(response.status_code, 200)
+        frame = response.json()["frames"][0]
+        np.testing.assert_allclose(frame["root_linear_velocity"], [20.0, 20.1, 20.78])
+        np.testing.assert_allclose(frame["root_angular_velocity"], [30.0, 30.1, 30.78])
+        self.assertEqual(len(frame["body_linear_velocities"]), 3)
+        self.assertEqual(len(frame["body_angular_velocities"]), 3)
 
     def test_kimodo_csv_loader_detects_and_resamples_g1_qpos_csv(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -812,8 +939,11 @@ class GroupedApiTest(unittest.TestCase):
         expected_twist2_policy_ids = {_twist2_policy_id_for_model(model_path) for model_path in twist2_models}
         self.assertIn("mock_passthrough", policy_ids)
         self.assertIn("motion_tracking", policy_ids)
+        self.assertIn("motion_tracking_sim2real_0315", policy_ids)
         self.assertGreaterEqual(len(expected_twist2_policy_ids), 2)
         self.assertTrue(expected_twist2_policy_ids.issubset(policy_ids))
+        self.assertIn("holomotion_motion_tracking", policy_ids)
+        self.assertIn("humanoid_gpt_motion_tracking", policy_ids)
         self.assertIn("mock_g1_policy", policy_ids)
         self.assertNotIn("g1_tracking_onnx", policy_ids)
         onnx_policy = next(policy for policy in policies if policy["policy_id"] == "motion_tracking")
@@ -827,11 +957,48 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(onnx_policy["model_file"], "policy_latest.onnx")
         self.assertEqual(onnx_policy["display_name_i18n"]["zh"], "运动追踪")
         by_id = {policy["policy_id"]: policy for policy in policies}
+        sim2real_policy = by_id["motion_tracking_sim2real_0315"]
+        self.assertEqual(sim2real_policy["runtime"], "browser")
+        self.assertEqual(sim2real_policy["framework"], "onnx")
+        self.assertEqual(sim2real_policy["format_id"], "motion_tracking_sim2real_0315")
+        self.assertEqual(
+            sim2real_policy["config_path"],
+            "/api/policy-plugins/motion_tracking_sim2real_0315/config",
+        )
+        self.assertEqual(sim2real_policy["model_file"], "policy_sim2real_0315.onnx")
+        self.assertEqual(sim2real_policy["display_name_i18n"]["zh"], "运动追踪 / Sim2Real 0315")
         sonic_policy = by_id["sonic"]
         self.assertEqual(sonic_policy["runtime"], "browser")
         self.assertEqual(sonic_policy["framework"], "custom_js")
         self.assertEqual(sonic_policy["module_path"], "./SonicPolicy.js")
         self.assertEqual(sonic_policy["config_path"], "/policy-plugins/sonic/sonic_policy.json")
+        holomotion_policy = by_id["holomotion_motion_tracking"]
+        self.assertEqual(holomotion_policy["runtime"], "browser")
+        self.assertEqual(holomotion_policy["framework"], "custom_js")
+        self.assertEqual(holomotion_policy["format_id"], "holomotion")
+        self.assertEqual(holomotion_policy["module_path"], "./HoloMotionPolicy.js")
+        self.assertEqual(
+            holomotion_policy["config_path"],
+            "/policy-plugins/holomotion/holomotion_policy_config.json",
+        )
+        holomotion_v13_policy = by_id["holomotion_v13_motion_tracking"]
+        self.assertEqual(holomotion_v13_policy["runtime"], "browser")
+        self.assertEqual(holomotion_v13_policy["framework"], "custom_js")
+        self.assertEqual(holomotion_v13_policy["format_id"], "holomotion_v13")
+        self.assertEqual(holomotion_v13_policy["module_path"], "./HoloMotionV13Policy.js")
+        self.assertEqual(
+            holomotion_v13_policy["config_path"],
+            "/policy-plugins/holomotion_v13/holomotion_v13_policy_config.json",
+        )
+        humanoid_gpt_policy = by_id["humanoid_gpt_motion_tracking"]
+        self.assertEqual(humanoid_gpt_policy["runtime"], "browser")
+        self.assertEqual(humanoid_gpt_policy["framework"], "custom_js")
+        self.assertEqual(humanoid_gpt_policy["format_id"], "humanoid_gpt")
+        self.assertEqual(humanoid_gpt_policy["module_path"], "./HumanoidGPTPolicy.js")
+        self.assertEqual(
+            humanoid_gpt_policy["config_path"],
+            "/policy-plugins/humanoid_gpt/humanoid_gpt_policy_config.json",
+        )
         for model_path in twist2_models:
             policy_id = _twist2_policy_id_for_model(model_path)
             twist2_policy = by_id[policy_id]
@@ -848,6 +1015,23 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(twist2_config_response.status_code, 200)
         self.assertNotIn("path", twist2_config_response.json()["onnx"])
 
+        holomotion_config_response = self.client.get("/policy-plugins/holomotion/holomotion_policy_config.json")
+        self.assertEqual(holomotion_config_response.status_code, 200)
+        self.assertEqual(holomotion_config_response.json()["onnx"]["path"], "./model.onnx")
+
+        holomotion_v13_config_response = self.client.get(
+            "/policy-plugins/holomotion_v13/holomotion_v13_policy_config.json"
+        )
+        self.assertEqual(holomotion_v13_config_response.status_code, 200)
+        self.assertEqual(holomotion_v13_config_response.json()["onnx"]["path"], "./model.onnx")
+
+        humanoid_gpt_config_response = self.client.get(
+            "/policy-plugins/humanoid_gpt/humanoid_gpt_policy_config.json"
+        )
+        self.assertEqual(humanoid_gpt_config_response.status_code, 200)
+        self.assertEqual(humanoid_gpt_config_response.json()["onnx"]["path"], "./model.onnx")
+        self.assertEqual(humanoid_gpt_config_response.json()["humanoid_gpt"]["obs_dim"], 136)
+
         model_response = self.client.get("/policy-plugins/motion_tracking/policy_latest.onnx")
         self.assertEqual(model_response.status_code, 200)
         self.assertEqual(model_response.headers["content-type"], "application/octet-stream")
@@ -858,13 +1042,197 @@ class GroupedApiTest(unittest.TestCase):
         self.assertEqual(twist2_model_response.headers["content-type"], "application/octet-stream")
         self.assertGreater(len(twist2_model_response.content), 1024)
 
+        holomotion_model_response = self.client.head("/policy-plugins/holomotion/model.onnx")
+        self.assertEqual(holomotion_model_response.status_code, 200)
+        self.assertEqual(holomotion_model_response.headers["content-type"], "application/octet-stream")
+        self.assertGreater(int(holomotion_model_response.headers["content-length"]), 1024)
+
+        holomotion_v13_model_path = REPO_ROOT / "policy_plugins" / "holomotion_v13" / "model.onnx"
+        if holomotion_v13_model_path.exists():
+            holomotion_v13_model_response = self.client.head("/policy-plugins/holomotion_v13/model.onnx")
+            self.assertEqual(holomotion_v13_model_response.status_code, 200)
+            self.assertEqual(holomotion_v13_model_response.headers["content-type"], "application/octet-stream")
+            self.assertGreater(int(holomotion_v13_model_response.headers["content-length"]), 1024)
+
+        humanoid_gpt_model_path = REPO_ROOT / "policy_plugins" / "humanoid_gpt" / "model.onnx"
+        if humanoid_gpt_model_path.exists():
+            humanoid_gpt_model_response = self.client.head("/policy-plugins/humanoid_gpt/model.onnx")
+            self.assertEqual(humanoid_gpt_model_response.status_code, 200)
+            self.assertEqual(humanoid_gpt_model_response.headers["content-type"], "application/octet-stream")
+            self.assertGreater(int(humanoid_gpt_model_response.headers["content-length"]), 1024)
+
+    def test_onnxruntime_web_wasm_assets_are_served_from_backend_origin(self) -> None:
+        mjs_response = self.client.get("/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs")
+        self.assertEqual(mjs_response.status_code, 200)
+        self.assertIn("javascript", mjs_response.headers["content-type"])
+        self.assertIn("ort-wasm-simd-threaded.jsep.wasm", mjs_response.text)
+
+        wasm_response = self.client.head("/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm")
+        self.assertEqual(wasm_response.status_code, 200)
+        self.assertGreater(int(wasm_response.headers["content-length"]), 1024)
+
+    def test_humanoid_gpt_backend_infer_endpoint_returns_action_payload(self) -> None:
+        expected = {
+            "actions": [0.1, -0.2],
+            "joint_positions": [0.5, -0.5],
+            "cache_id": "policy-cache",
+            "input_names": ["obs"],
+            "output_names": ["continuous_actions"],
+        }
+        with patch("g1_viewer.api.infer_humanoid_gpt", return_value=expected) as infer:
+            response = self.client.post(
+                "/api/humanoid-gpt/infer",
+                json={
+                    "cache_id": "policy-cache",
+                    "reset_cache": True,
+                    "current_state": {"state": {"joint_positions": []}},
+                    "ref_curr": {"state": {"joint_positions": []}},
+                    "ref_next": {"state": {"joint_positions": []}},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), expected)
+        infer.assert_called_once_with(
+            {
+                "cache_id": "policy-cache",
+                "reset_cache": True,
+                "current_state": {"state": {"joint_positions": []}},
+                "ref_curr": {"state": {"joint_positions": []}},
+                "ref_next": {"state": {"joint_positions": []}},
+            }
+        )
+
+    def test_holomotion_v13_backend_infer_endpoint_returns_action_payload(self) -> None:
+        expected = {
+            "actions": [0.1, -0.2],
+            "present_key_values": [1.0, 2.0],
+            "present_key_values_shape": [1, 2],
+        }
+        with patch("g1_viewer.api.infer_holomotion_v13", return_value=expected) as infer:
+            response = self.client.post(
+                "/api/holomotion-v13/infer",
+                json={
+                    "obs": [0.0, 1.0],
+                    "past_key_values": [0.0, 0.0],
+                    "past_key_values_shape": [1, 2],
+                    "step_idx": 3,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), expected)
+        infer.assert_called_once_with(
+            {
+                "obs": [0.0, 1.0],
+                "past_key_values": [0.0, 0.0],
+                "past_key_values_shape": [1, 2],
+                "step_idx": 3,
+            }
+        )
+
+    def test_holomotion_v13_backend_infer_endpoint_supports_backend_cache_id(self) -> None:
+        expected = {
+            "actions": [0.1, -0.2],
+            "cache_id": "policy-cache",
+            "present_key_values_shape": [1, 2],
+        }
+        with patch("g1_viewer.api.infer_holomotion_v13", return_value=expected) as infer:
+            response = self.client.post(
+                "/api/holomotion-v13/infer",
+                json={
+                    "obs": [0.0, 1.0],
+                    "cache_id": "policy-cache",
+                    "past_key_values_shape": [1, 2],
+                    "reset_cache": True,
+                    "step_idx": 0,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), expected)
+        infer.assert_called_once_with(
+            {
+                "obs": [0.0, 1.0],
+                "cache_id": "policy-cache",
+                "past_key_values_shape": [1, 2],
+                "reset_cache": True,
+                "step_idx": 0,
+            }
+        )
+
+    def test_holomotion_v13_backend_keeps_present_key_values_out_of_cached_response(self) -> None:
+        import numpy as np
+
+        from g1_viewer.holomotion_v13 import HoloMotionV13Backend
+
+        class FakeSession:
+            def run(self, output_names, feeds):
+                self.feeds = feeds
+                return [
+                    np.asarray([[0.1, -0.2]], dtype=np.float32),
+                    np.asarray([[1.0, 2.0]], dtype=np.float32),
+                ]
+
+        backend = HoloMotionV13Backend()
+        backend._session = FakeSession()
+        backend._input_names = ["obs", "past_key_values", "step_idx"]
+        backend._output_names = ["actions", "present_key_values"]
+
+        response = backend.infer(
+            obs=[0.0, 1.0],
+            cache_id="policy-cache",
+            past_key_values_shape=[1, 2],
+            reset_cache=True,
+            step_idx=0,
+        )
+
+        self.assertEqual(response["cache_id"], "policy-cache")
+        self.assertEqual(response["actions"], [0.10000000149011612, -0.20000000298023224])
+        self.assertEqual(response["present_key_values_shape"], [1, 2])
+        self.assertNotIn("present_key_values", response)
+        self.assertEqual(backend._kv_cache["policy-cache"].tolist(), [[1.0, 2.0]])
+
+    def test_holomotion_v13_backend_limits_cached_sessions(self) -> None:
+        import numpy as np
+
+        from g1_viewer.holomotion_v13 import HoloMotionV13Backend
+
+        class FakeSession:
+            def run(self, output_names, feeds):
+                return [
+                    np.asarray([[0.1, -0.2]], dtype=np.float32),
+                    np.asarray([[1.0, 2.0]], dtype=np.float32),
+                ]
+
+        backend = HoloMotionV13Backend(max_cached_sessions=2)
+        backend._session = FakeSession()
+        backend._input_names = ["obs", "past_key_values"]
+        backend._output_names = ["actions", "present_key_values"]
+
+        for cache_id in ["a", "b", "c"]:
+            backend.infer(obs=[0.0, 1.0], cache_id=cache_id, past_key_values_shape=[1, 2], reset_cache=True)
+
+        self.assertEqual(list(backend._kv_cache.keys()), ["b", "c"])
+
     def test_policy_plugin_dynamic_config_points_to_the_selected_model(self) -> None:
         response = self.client.get("/api/policy-plugins/motion_tracking/config")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["onnx"]["path"], "/policy-plugins/motion_tracking/policy_latest.onnx")
+        self.assertEqual(payload["onnx"]["meta"]["in_shapes"], [[[1, 1590]]])
         self.assertIn("policy_joint_names", payload)
+
+        sim2real_response = self.client.get("/api/policy-plugins/motion_tracking_sim2real_0315/config")
+        self.assertEqual(sim2real_response.status_code, 200)
+        sim2real_payload = sim2real_response.json()
+        self.assertEqual(
+            sim2real_payload["onnx"]["path"],
+            "/policy-plugins/motion_tracking_sim2real_0315/policy_sim2real_0315.onnx",
+        )
+        self.assertEqual(sim2real_payload["onnx"]["meta"]["in_shapes"], [[[1, 1590]]])
+        self.assertIn("policy_joint_names", sim2real_payload)
 
         for model_path in sorted((REPO_ROOT / "policy_plugins" / "twist2").glob("*.onnx")):
             policy_id = _twist2_policy_id_for_model(model_path)
@@ -1324,6 +1692,38 @@ class BrowserApiTest(unittest.TestCase):
             self.assertEqual(nodes[0]["node_type"], "motion")
             self.assertEqual(nodes[0]["format"], "twist2")
 
+    def test_browser_list_paginates_large_directory_results(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            for name in ["000.pkl", "001.pkl", "002.pkl", "ignored.txt"]:
+                (temp_root / name).write_bytes(b"placeholder")
+
+            first_response = self.client.post(
+                "/api/browser/list",
+                json={"path": str(temp_root), "limit": 2, "offset": 0},
+            )
+
+            self.assertEqual(first_response.status_code, 200)
+            first_payload = first_response.json()
+            self.assertEqual([node["name"] for node in first_payload["nodes"]], ["000.pkl", "001.pkl"])
+            self.assertEqual(first_payload["total_count"], 3)
+            self.assertEqual(first_payload["offset"], 0)
+            self.assertEqual(first_payload["limit"], 2)
+            self.assertTrue(first_payload["has_more"])
+
+            second_response = self.client.post(
+                "/api/browser/list",
+                json={"path": str(temp_root), "limit": 2, "offset": 2},
+            )
+
+            self.assertEqual(second_response.status_code, 200)
+            second_payload = second_response.json()
+            self.assertEqual([node["name"] for node in second_payload["nodes"]], ["002.pkl"])
+            self.assertEqual(second_payload["total_count"], 3)
+            self.assertEqual(second_payload["offset"], 2)
+            self.assertEqual(second_payload["limit"], 2)
+            self.assertFalse(second_payload["has_more"])
+
     def test_browser_list_detects_motion_tracking_npz_by_schema(self) -> None:
         with TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -1338,6 +1738,21 @@ class BrowserApiTest(unittest.TestCase):
             self.assertEqual(nodes[0]["name"], "tracking_motion.npz")
             self.assertEqual(nodes[0]["node_type"], "motion")
             self.assertEqual(nodes[0]["format"], "motion_tracking_npz")
+
+    def test_browser_list_detects_holomotion_npz_by_schema(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            motion_file = temp_root / "holomotion_motion.npz"
+            _write_holomotion_npz(motion_file)
+
+            response = self.client.post("/api/browser/list", json={"path": str(temp_root)})
+
+            self.assertEqual(response.status_code, 200)
+            nodes = response.json()["nodes"]
+            self.assertEqual(len(nodes), 1)
+            self.assertEqual(nodes[0]["name"], "holomotion_motion.npz")
+            self.assertEqual(nodes[0]["node_type"], "motion")
+            self.assertEqual(nodes[0]["format"], "holomotion_npz")
 
     def test_browser_list_detects_motion_tracking_dataset_npz_by_sidecar_metadata(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1603,6 +2018,37 @@ class TrimExportApiTest(unittest.TestCase):
                 self.assertEqual(data["local_body_pos"].shape, (2, 38, 3))
                 self.assertEqual(data["joint_names"].tolist(), [f"joint_{idx}" for idx in range(29)])
                 self.assertEqual(data["body_names"].tolist(), [f"body_{idx}" for idx in range(38)])
+
+    def test_trim_export_defaults_holomotion_npz_to_same_schema(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            motion_path = Path(temp_dir) / "holomotion_motion.npz"
+            _write_holomotion_npz(motion_path, frame_count=3)
+            sequence = self.controller.load_clip(str(motion_path), "holomotion_npz")
+            output_dir = Path(temp_dir) / "clips"
+
+            response = self.client.post(
+                "/api/trim_export",
+                json={
+                    "sequence_id": sequence.sequence_id,
+                    "start_frame": 0,
+                    "end_frame": 1,
+                    "output_dir": str(output_dir),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            output_path = Path(payload["output_path"])
+            self.assertEqual(payload["export_format"], "holomotion_npz")
+            self.assertEqual(output_path.parent, output_dir)
+            self.assertEqual(output_path.suffix, ".npz")
+            with np.load(output_path, allow_pickle=True) as data:
+                self.assertIn("metadata", data.files)
+                self.assertEqual(data["ref_dof_pos"].shape, (2, 29))
+                self.assertEqual(data["ref_global_translation"].shape, (2, 3, 3))
+                self.assertEqual(data["ref_global_rotation_quat"].shape, (2, 3, 4))
+                self.assertEqual(data["ref_global_velocity"].shape, (2, 3, 3))
+                self.assertEqual(data["ref_global_angular_velocity"].shape, (2, 3, 3))
 
     def test_trim_export_can_force_motion_tracking_npz_from_kimodo_source(self) -> None:
         with TemporaryDirectory() as temp_dir:

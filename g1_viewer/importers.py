@@ -26,6 +26,7 @@ MOTION_TRACKING_NPZ_REQUIRED_KEYS = {
     "body_names",
 }
 MOTION_TRACKING_NPZ_DATASET_METADATA_FILES = ("meta_motion.json", "id_label.json")
+HOLOMOTION_NPZ_PREFIXES = ("ref", "ft_ref", "robot", "")
 KIMODO_CSV_SOURCE_FPS = 30.0
 KIMODO_CSV_TARGET_FPS = 50.0
 KIMODO_CSV_BODY_INDEXES = [0, 4, 10, 18, 5, 11, 19, 9, 16, 22, 28, 17, 23, 29]
@@ -175,6 +176,27 @@ def _as_string_list(value: Any) -> list[str] | None:
     return None
 
 
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            value = value.item()
+        else:
+            value = value.tolist()
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return {"metadata": value}
+        return payload if isinstance(payload, dict) else {"metadata": payload}
+    return {}
+
+
 def _slerp_wxyz(key_times: np.ndarray, quaternions_wxyz: np.ndarray, target_times: np.ndarray) -> np.ndarray:
     quaternions_wxyz = _normalize_quaternions(quaternions_wxyz)
     if target_times.size == 0:
@@ -279,8 +301,12 @@ def _sequence_from_arrays(
     joint_velocities: np.ndarray | None = None,
     root_translation: np.ndarray | None = None,
     root_rotation_wxyz: np.ndarray | None = None,
+    root_linear_velocity: np.ndarray | None = None,
+    root_angular_velocity: np.ndarray | None = None,
     body_positions: np.ndarray | None = None,
     body_rotations_wxyz: np.ndarray | None = None,
+    body_linear_velocities: np.ndarray | None = None,
+    body_angular_velocities: np.ndarray | None = None,
     joint_names: list[str] | None = None,
     body_names: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -302,6 +328,14 @@ def _sequence_from_arrays(
         root_rotation_wxyz = np.tile(np.array([1.0, 0.0, 0.0, 0.0]), (frame_count, 1))
     root_rotation_wxyz = np.asarray(root_rotation_wxyz, dtype=float)
 
+    if root_linear_velocity is None or np.asarray(root_linear_velocity).size == 0:
+        root_linear_velocity = np.zeros((frame_count, 3), dtype=float)
+    root_linear_velocity = np.asarray(root_linear_velocity, dtype=float)
+
+    if root_angular_velocity is None or np.asarray(root_angular_velocity).size == 0:
+        root_angular_velocity = np.zeros((frame_count, 3), dtype=float)
+    root_angular_velocity = np.asarray(root_angular_velocity, dtype=float)
+
     if body_positions is None:
         body_positions = np.zeros((frame_count, 0, 3), dtype=float)
     body_positions = np.asarray(body_positions, dtype=float)
@@ -309,6 +343,14 @@ def _sequence_from_arrays(
     if body_rotations_wxyz is None:
         body_rotations_wxyz = np.zeros((frame_count, 0, 4), dtype=float)
     body_rotations_wxyz = np.asarray(body_rotations_wxyz, dtype=float)
+
+    if body_linear_velocities is None:
+        body_linear_velocities = np.zeros((frame_count, body_positions.shape[1], 3), dtype=float)
+    body_linear_velocities = np.asarray(body_linear_velocities, dtype=float)
+
+    if body_angular_velocities is None:
+        body_angular_velocities = np.zeros((frame_count, body_positions.shape[1], 3), dtype=float)
+    body_angular_velocities = np.asarray(body_angular_velocities, dtype=float)
 
     if joint_names is None:
         joint_names = CANONICAL_G1_JOINT_NAMES_29[:joint_count] or [
@@ -325,10 +367,14 @@ def _sequence_from_arrays(
                 timestamp=idx / fps,
                 root_translation=root_translation[idx].tolist(),
                 root_rotation_wxyz=root_rotation_wxyz[idx].tolist(),
+                root_linear_velocity=root_linear_velocity[idx].tolist(),
+                root_angular_velocity=root_angular_velocity[idx].tolist(),
                 joint_positions=joint_positions[idx].tolist(),
                 joint_velocities=joint_velocities[idx].tolist(),
                 body_positions=body_positions[idx].tolist(),
                 body_rotations_wxyz=body_rotations_wxyz[idx].tolist(),
+                body_linear_velocities=body_linear_velocities[idx].tolist(),
+                body_angular_velocities=body_angular_velocities[idx].tolist(),
                 metadata={"frame_index": idx},
             )
         )
@@ -513,6 +559,161 @@ class MotionTrackingNpzImporter(DatasetImporter):
             return False
 
 
+class HoloMotionNpzImporter(DatasetImporter):
+    format_name = "holomotion_npz"
+
+    def can_handle(self, path: Path) -> bool:
+        return path.is_file() and path.suffix.lower() == ".npz" and self._sniff_motion_payload(path)
+
+    def scan_items(self, path: Path) -> list[ScanItem]:
+        candidates: list[Path] = []
+        if path.is_file() and self.can_handle(path):
+            candidates.append(path)
+        elif path.is_dir():
+            candidates.extend(candidate for candidate in path.rglob("*.npz") if self.can_handle(candidate))
+        return [
+            ScanItem(
+                path=str(candidate),
+                name=candidate.stem,
+                format="holomotion_npz",
+                item_type="file",
+            )
+            for candidate in sorted(dict.fromkeys(candidates))
+        ]
+
+    def load(self, path: Path) -> StateSequence:
+        payload = self._load_payload(path)
+        prefix = self._select_prefix(payload)
+        metadata = _metadata_dict(payload.get("metadata"))
+        fps = float(metadata.get("motion_fps") or metadata.get("fps") or payload.get("fps", 50.0))
+
+        joint_positions = np.asarray(self._prefixed(payload, prefix, "dof_pos"), dtype=float)
+        joint_velocities = np.asarray(
+            self._prefixed(payload, prefix, "dof_vel", "dof_vels", default=np.zeros_like(joint_positions)),
+            dtype=float,
+        )
+        body_positions = np.asarray(self._prefixed(payload, prefix, "global_translation"), dtype=float)
+        body_rotations_xyzw = np.asarray(self._prefixed(payload, prefix, "global_rotation_quat"), dtype=float)
+        body_linear_velocities = np.asarray(
+            self._prefixed(payload, prefix, "global_velocity", default=np.zeros_like(body_positions)),
+            dtype=float,
+        )
+        body_angular_velocities = np.asarray(
+            self._prefixed(payload, prefix, "global_angular_velocity", default=np.zeros_like(body_positions)),
+            dtype=float,
+        )
+
+        if joint_positions.ndim == 1:
+            joint_positions = joint_positions[None, :]
+        if joint_velocities.ndim == 1:
+            joint_velocities = joint_velocities[None, :]
+        if body_positions.ndim == 2 and body_positions.shape[1] % 3 == 0:
+            body_positions = _reshape_body_array(body_positions, 3)
+        if body_rotations_xyzw.ndim == 2 and body_rotations_xyzw.shape[1] % 4 == 0:
+            body_rotations_xyzw = _reshape_body_array(body_rotations_xyzw, 4)
+        if body_linear_velocities.ndim == 2 and body_linear_velocities.shape[1] % 3 == 0:
+            body_linear_velocities = _reshape_body_array(body_linear_velocities, 3)
+        if body_angular_velocities.ndim == 2 and body_angular_velocities.shape[1] % 3 == 0:
+            body_angular_velocities = _reshape_body_array(body_angular_velocities, 3)
+
+        body_rotations_wxyz = self._body_quat_xyzw_to_wxyz(body_rotations_xyzw)
+        root_translation = body_positions[:, 0, :] if body_positions.shape[1] else np.zeros((joint_positions.shape[0], 3))
+        root_rotation_wxyz = (
+            body_rotations_wxyz[:, 0, :]
+            if body_rotations_wxyz.shape[1]
+            else np.tile(np.array([1.0, 0.0, 0.0, 0.0]), (joint_positions.shape[0], 1))
+        )
+        root_linear_velocity = (
+            body_linear_velocities[:, 0, :]
+            if body_linear_velocities.shape[1]
+            else np.zeros((joint_positions.shape[0], 3))
+        )
+        root_angular_velocity = (
+            body_angular_velocities[:, 0, :]
+            if body_angular_velocities.shape[1]
+            else np.zeros((joint_positions.shape[0], 3))
+        )
+
+        joint_names = _as_string_list(payload.get("joint_names"))
+        if joint_names is None:
+            joint_names = CANONICAL_G1_JOINT_NAMES_29[: joint_positions.shape[1]]
+        body_names = _as_string_list(payload.get("body_names"))
+        if body_names is None:
+            body_names = [f"body_{idx}" for idx in range(body_positions.shape[1])]
+
+        sequence_metadata = {
+            **metadata,
+            "keys": sorted(payload.keys()),
+            "original_suffix": ".npz",
+            "holomotion_prefix": prefix or "legacy",
+            "root_rot_order": "xyzw",
+        }
+        return _sequence_from_arrays(
+            name=str(metadata.get("motion_key") or metadata.get("raw_motion_key") or path.stem),
+            source_format="holomotion_npz",
+            source_path=path,
+            fps=fps,
+            joint_positions=joint_positions,
+            joint_velocities=joint_velocities,
+            root_translation=root_translation,
+            root_rotation_wxyz=root_rotation_wxyz,
+            root_linear_velocity=root_linear_velocity,
+            root_angular_velocity=root_angular_velocity,
+            body_positions=body_positions,
+            body_rotations_wxyz=body_rotations_wxyz,
+            body_linear_velocities=body_linear_velocities,
+            body_angular_velocities=body_angular_velocities,
+            joint_names=joint_names,
+            body_names=body_names,
+            metadata=sequence_metadata,
+        )
+
+    def _load_payload(self, path: Path) -> dict[str, Any]:
+        with np.load(path, allow_pickle=True) as npz_file:
+            return {key: npz_file[key] for key in npz_file.files}
+
+    def _select_prefix(self, payload: dict[str, Any]) -> str:
+        for prefix in HOLOMOTION_NPZ_PREFIXES:
+            if self._has_required_keys(payload, prefix):
+                return prefix
+        raise ValueError("Missing HoloMotion reference keys")
+
+    def _has_required_keys(self, payload: dict[str, Any], prefix: str) -> bool:
+        return (
+            self._key(prefix, "dof_pos") in payload
+            and self._key(prefix, "global_translation") in payload
+            and self._key(prefix, "global_rotation_quat") in payload
+        )
+
+    def _prefixed(self, payload: dict[str, Any], prefix: str, *names: str, default: Any | None = None) -> Any:
+        for name in names:
+            key = self._key(prefix, name)
+            if key in payload:
+                return payload[key]
+        if default is not None:
+            return default
+        raise ValueError(f"Missing HoloMotion key for {names[0]!r}")
+
+    def _key(self, prefix: str, name: str) -> str:
+        return f"{prefix}_{name}" if prefix else name
+
+    def _body_quat_xyzw_to_wxyz(self, rotations: np.ndarray) -> np.ndarray:
+        rotations = np.asarray(rotations, dtype=float)
+        if rotations.ndim != 3 or rotations.shape[2] != 4:
+            raise ValueError(f"HoloMotion global_rotation_quat must have shape (T, B, 4), got {rotations.shape}")
+        flat = rotations.reshape(-1, 4)
+        converted = _xyzw_to_wxyz(_normalize_quaternions(flat))
+        return converted.reshape(rotations.shape)
+
+    def _sniff_motion_payload(self, path: Path) -> bool:
+        try:
+            with np.load(path, allow_pickle=True) as npz_file:
+                keys = set(npz_file.files)
+        except Exception:
+            return False
+        return any(self._has_required_keys({key: True for key in keys}, prefix) for prefix in HOLOMOTION_NPZ_PREFIXES)
+
+
 class Twist2Importer(DatasetImporter):
     format_name = "twist2"
 
@@ -540,7 +741,7 @@ class Twist2Importer(DatasetImporter):
         ]
 
     def load(self, path: Path) -> StateSequence:
-        payload = self._load_payload(path)
+        payload, payload_metadata = self._load_payload_with_metadata(path)
         payload = self._unwrap_payload(payload)
 
         fps = float(payload.get("fps", payload.get("frame_rate", 30.0)))
@@ -603,6 +804,7 @@ class Twist2Importer(DatasetImporter):
         metadata = {
             "keys": sorted(payload.keys()),
             "original_suffix": path.suffix.lower(),
+            **payload_metadata,
         }
         if root_rotation_order:
             metadata["root_rot_order"] = root_rotation_order
@@ -633,23 +835,32 @@ class Twist2Importer(DatasetImporter):
         ]
 
     def _load_payload(self, path: Path) -> Any:
+        payload, _ = self._load_payload_with_metadata(path)
+        return payload
+
+    def _load_payload_with_metadata(self, path: Path) -> tuple[Any, dict[str, Any]]:
         suffix = path.suffix.lower()
         if suffix == ".pkl":
-            with path.open("rb") as handle:
-                return pickle.load(handle)
+            try:
+                with path.open("rb") as handle:
+                    return pickle.load(handle), {"pickle_loader": "pickle"}
+            except (pickle.UnpicklingError, EOFError, AttributeError, ImportError, IndexError, ValueError):
+                import joblib
+
+                return joblib.load(path), {"pickle_loader": "joblib"}
         if suffix == ".npz":
             with np.load(path, allow_pickle=True) as npz_file:
-                return {key: npz_file[key] for key in npz_file.files}
+                return {key: npz_file[key] for key in npz_file.files}, {}
         if suffix == ".npy":
             data = np.load(path, allow_pickle=True)
             if hasattr(data, "item"):
                 try:
-                    return data.item()
+                    return data.item(), {}
                 except ValueError:
-                    return data
-            return data
+                    return data, {}
+            return data, {}
         if suffix == ".json":
-            return json.loads(path.read_text())
+            return json.loads(path.read_text()), {}
         raise ValueError(f"Unsupported motion file type: {path}")
 
     def _unwrap_payload(self, payload: Any) -> dict[str, Any]:
@@ -782,6 +993,7 @@ class KimodoCsvImporter(DatasetImporter):
 
 IMPORTERS: list[DatasetImporter] = [
     SonicImporter(),
+    HoloMotionNpzImporter(),
     MotionTrackingNpzImporter(),
     Twist2Importer(),
     KimodoCsvImporter(),
